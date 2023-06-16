@@ -1,10 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-use std::{
-	fs::File,
-	error::Error,
-	env::args,
-	io::Read,
-};
+use std::fs::{ self, File };
+use nitrogen::fmt_path;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(serde::Deserialize)]
 struct Pool {
@@ -12,25 +8,19 @@ struct Pool {
 	files: Vec<String>,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-fn main() -> Result<(), Box<dyn Error>> {
-	let mut buffer = String::with_capacity(127);
-	File::open(
-		args()
-			.nth(1)
-			.map_or(Err("Argument Missing"), |path| Ok(nitrogen::to_path(path)))?
-	)?
-		.read_to_string(&mut buffer)?;
-	let Pool { common , files } = toml::from_str::<Pool>(&buffer)?;
-	let common = common.unwrap_or_default();
-	let mut files = files
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let Some(path) =  std::env::args().nth(1) else { Err("No Argument")? };
+	let Pool { common, files } = toml::from_str(&fs::read_to_string(fmt_path(path))?)?;
+	let common = common.map_or_else(String::new, |directory| directory + std::path::MAIN_SEPARATOR_STR);
+	let mut files: Vec<File> = files
 		.into_iter()
-		.filter_map(|file| File::open(nitrogen::to_path(format!("{common}{}{file}", std::path::MAIN_SEPARATOR))).ok())
-		.collect::<Vec<File>>();
+		.filter_map(|file| File::open(fmt_path(format!("{common}{file}"))).ok())
+		.collect();
 	let mut generator = fastrand::Rng::new();
-	for upper in (0..files.len()).rev() {
+	while !files.is_empty() {
 		rodio::OutputStream::try_default()?
 			.1
-			.play_once(files.remove(generator.usize(0..=upper)))?
+			.play_once(files.remove(generator.usize(0..files.len())))?
 			.sleep_until_end();
 	}
 	Ok(())
