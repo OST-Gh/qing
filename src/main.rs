@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	let common = common.unwrap_or_default();
 	let mut files = files
 		.into_iter()
-		.filter_map(|file| File::open(nitrogen::to_path(format!("{common}{file}"))).ok())
+		.filter_map(|file| File::open(nitrogen::to_path(format!("{common}{}{file}", std::path::MAIN_SEPARATOR))).ok())
 		.collect::<Vec<File>>();
 	let mut generator = fastrand::Rng::new();
 	for upper in (0..files.len()).rev() {
