@@ -1,0 +1,34 @@
+[package]
+name = "queue"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+carbon = { path = "../elem/carbon" }
+nitrogen = { path = "../elem/nitrogen", features = ["path"] }
+serde = { version = "1", features = ["derive"], default-featurse = false }
+toml = { version = "*", features = ["parse"], default-features = false }
+rodio = { version = "*", features = ["mp3", "wav"], default-features = false }
+fastrand = "2"
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = true
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = "abort"
+incremental = false
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = 3
+debug = false
+strip = true
+debug-assertions = false
+overflow-checks = false
+incremental = false
+codegen-units = 1
