@@ -1,7 +1,12 @@
 [package]
-name = "queue"
+name = "qing"
 edition = "2021"
 version = "0.1.0"
+authors = ["OST-Gh"]
+edition = "2021"
+description = "A music player which's name is a pun on the word queueing."
+keywords = [""]
+categories = [""]
 
 [dependencies]
 nitrogen = { path = "../elem/nitrogen", features = ["path"] }
