@@ -28,11 +28,11 @@ fn main() {
 	let song = match fs::read_to_string(fmt_path(&*path)).map(|contents| toml::from_str(&contents)) {
 		Ok(Ok(Pool { song })) => song,
 		Ok(Err(why)) => {
-			handle.print(format!("A fatal error occured whilst attempting to parse the contents of [{path}]; \"{why}.\""));
+			handle.print(format!("A fatal error occured whilst attempting to parse the contents of [{path}]; '{why}'"));
 			return
 		},
 		Err(why) => {
-			handle.print(format!("A fatal error occured whilst attempting to load the contents [{path}]; \"{why}.\""));
+			handle.print(format!("A fatal error occured whilst attempting to load the contents [{path}]; '{why}'"));
 			return
 		},
 	};
@@ -45,7 +45,7 @@ fn main() {
 				match File::open(fmt_path(file)) {
 					Ok(contents) => Some((name, contents)),
 					Err(why) => {
-						handle.print(format!("An error occured whilst attempting to load the audio contents of [{name}]; \"{why}\""));
+						handle.print(format!("An error occured whilst attempting to load the audio contents of [{name}]; '{why}'"));
 						None
 					},
 				}
@@ -60,7 +60,7 @@ fn main() {
 	let handles = match rodio::OutputStream::try_default() {
 		Ok(handles) => handles,
 		Err(why) => {
-			handle.print(format!("A fatal Error occured whilst attempting to determine the default audio output device; \"{why}\""));
+			handle.print(format!("A fatal Error occured whilst attempting to determine the default audio output device; '{why}'"));
 			return
 		},
 	};
@@ -77,7 +77,7 @@ fn main() {
 				playback.sleep_until_end();
 			},
 			Err(why) => {
-				handle.print(format!("A fatal Error occured whilst attempting to playback [{name}] from the default audio output device; \"{why}\""));
+				handle.print(format!("A fatal Error occured whilst attempting to playback [{name}] from the default audio output device; '{why}'"));
 				return
 			},
 		}
