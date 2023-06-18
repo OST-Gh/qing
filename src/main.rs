@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::fs::{ self, File };
-use nitrogen::{ result, fmt_path, Info };
+use nitrogen::{ fmt_path, traits::*, result };
 use oxygen::*;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(serde::Deserialize)]
@@ -10,42 +10,41 @@ struct Pool {
 
 #[derive(serde::Deserialize)]
 struct Song {
-	name: String,
-	file: Entry
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(serde::Deserialize)]
-enum Entry {
-	Spotify { key: String },
-	Local { file: String },
+	name: Box<str>,
+	file: Box<str>,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn main() -> result::Main {
 	let handle = custom![
-		Colour::from("|-|"),
+		Colour::from("|").colour(colours::PHOSPHOPHYLITE),
 		Time::from(Empty),
+		Colour::from("|").colour(colours::PHOSPHOPHYLITE),
+		' ',
 		Colour::from(Empty)
-	];
-
-
-
+			.colour(colours::FELDGRAU)
+			.terminated(false),
+	]
+		.pipe(Handle::from);
 	let Some(path) =  std::env::args().nth(1) else { Err("No Argument")? };
-	let Pool { song } = toml::from_str(&fs::read_to_string(fmt_path(path))?)?;
-	let mut files: Vec<File> = song
+	let mut files: Vec<(Box<str>, File)> = toml::from_str::<Pool>(&fs::read_to_string(fmt_path(path))?)?
+		.song
 		.into_iter()
 		.filter_map(|Song { name, file }|
-			match file {
-				Entry::Local { file } => File::open(fmt_path(name)).ok(),
-				_ => unimplemented!(),
-			}
+			File::open(fmt_path(file))
+				.ok()
+				.map(|file| (name, file))
 		)
 		.collect();
 	let mut generator = fastrand::Rng::new();
 	while !files.is_empty() {
 		rodio::OutputStream::try_default()?
 			.1
-			.play_once(files.remove(generator.usize(0..files.len())))?
-			.log(|| handle.print())
+			.play_once(
+				files
+					.remove(generator.usize(0..files.len()))
+					.inspect(|(name, _)| handle.print(format!("now playing [{name}]")))
+					.pipe(|(_, file)| file)
+			)?
 			.sleep_until_end();
 	}
 	Ok(())

@@ -8,7 +8,7 @@ keywords = [""]
 categories = [""]
 
 [dependencies]
-oxygen = { path = "../elem/oxygen", features = ["time"] }
+oxygen = { path = "../elem/oxygen" }
 carbon = { path = "../elem/carbon" }
 nitrogen = { path = "../elem/nitrogen" }
 serde = { version = "1", features = ["derive"], default-featurse = false }
