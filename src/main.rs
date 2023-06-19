@@ -18,7 +18,7 @@ fn main() {
 	let handle = custom![
 		Time::from(' '),
 		Colour::from(Formatting::UnderLined)
-			.colour(colours::FELDGRAU)
+			.colour(colours::QING)
 			.terminated(false),
 	]
 		.pipe(Handle::from);
