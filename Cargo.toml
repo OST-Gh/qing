@@ -11,7 +11,7 @@ categories = [""]
 oxygen = { path = "../elem/oxygen" }
 # carbon = { path = "../elem/carbon" }
 nitrogen = { path = "../elem/nitrogen" }
-serde = { version = "1", features = ["derive"], default-featurse = false }
+serde = { version = "1", features = ["derive"], default-features = false }
 toml = { version = "*", features = ["parse"], default-features = false }
 rodio = { version = "*", features = ["mp3", "wav"], default-features = false }
 fastrand = "2"
