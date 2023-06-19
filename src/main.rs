@@ -1,7 +1,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-use std::{fs::{ self, File }, ops::Deref};
+use std::fs::{ self, File };
 use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const EMPTY: [u8; 8] = [0; 8];
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(serde::Deserialize)]
 struct Pool {
@@ -25,7 +27,7 @@ fn main() {
 	let Some(path) = std::env::args().nth(1) else { return };
 
 	handle.print(format!("Loading and parsing the queue from [{path}]."));
-	let song = match fs::read_to_string(fmt_path(path.deref())).map(|contents| toml::from_str(&contents)) {
+	let song = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 		Ok(Ok(Pool { song })) => song,
 		Ok(Err(why)) => {
 			handle.print(format!("A fatal error occured whilst attempting to parse the contents of [{path}]; '{why}'"));
@@ -54,20 +56,30 @@ fn main() {
 		.collect();
 	handle.print('\0');
 
-	let mut generator = fastrand::Rng::new();
-
 	handle.print("Determining the output device.");
 	let handles = match rodio::OutputStream::try_default() {
 		Ok(handles) => handles,
 		Err(why) => {
-			handle.print(format!("A fatal Error occured whilst attempting to determine the default audio output device; '{why}'"));
+			handle.print(format!("A fatal error occured whilst attempting to determine the default audio output device; '{why}'"));
 			return
 		},
 	};
 
 	handle.print("Starting the queue playback.");
+	let mut buffer = EMPTY;
 	while !files.is_empty() {
-		let (name, contents) = files.remove(generator.usize(0..files.len()));
+		handle.print("Selecting next song.");
+		let (name, contents) = match getrandom::getrandom(&mut buffer) {
+			Err(why) => {
+				handle.print(format!("An error occured whilst attempting to generate a random index; '{why}'"));
+				continue
+			}
+			_ => {
+				let song = files.remove(usize::from_ne_bytes(buffer));
+				buffer = EMPTY;
+				song
+			},
+		};
 		match handles
 			.1
 			.play_once(contents)
@@ -77,8 +89,8 @@ fn main() {
 				playback.sleep_until_end();
 			},
 			Err(why) => {
-				handle.print(format!("A fatal Error occured whilst attempting to playback [{name}] from the default audio output device; '{why}'"));
-				return
+				handle.print(format!("An error occured whilst attempting to playback [{name}] from the default audio output device; '{why}'"));
+				continue
 			},
 		}
 	}
