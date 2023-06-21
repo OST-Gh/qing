@@ -2,13 +2,16 @@
 use std::fs::{ self, File };
 use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
+use serde::Deserialize;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(serde::Deserialize)]
-struct Pool {
+#[derive(Deserialize)]
+struct Playlist {
+	name: Box<str>,
+	main: Option<Box<str>>,
 	song: Vec<Song>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 struct Song {
 	name: Box<str>,
 	file: Box<str>,
@@ -24,9 +27,9 @@ fn main() {
 		.pipe(Handle::from);
 	let Some(path) = std::env::args().nth(1) else { return };
 
-	handle.print(format!("Loading and parsing the queue from [{path}]."));
-	let song = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
-		Ok(Ok(Pool { song })) => song,
+	handle.print(format!("Loading and parsing data from [{path}]."));
+	let Playlist { song, name, main } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
+		Ok(Ok(playlist)) => playlist,
 		Ok(Err(why)) => {
 			handle.print(format!("A fatal error occured whilst attempting to parse the contents of [{path}]; '{why}'"));
 			return
@@ -37,12 +40,14 @@ fn main() {
 		},
 	};
 
+	handle.print(format!("Loading all of the songs in [{name}]."));
+	let main = main.unwrap_or_default();
 	let mut files: Vec<(Box<str>, File)> = song
 		.into_iter()
 		.filter_map(|Song { name, file }|
 			{
 				handle.print(format!("Loading the audio contents of [{name}]."));
-				match File::open(fmt_path(file)) {
+				match File::open(fmt_path(format!("{file}{}{main}", std::path::MAIN_SEPARATOR))) {
 					Ok(contents) => Some((name, contents)),
 					Err(why) => {
 						handle.print(format!("An error occured whilst attempting to load the audio contents of [{name}]; '{why}'"));
@@ -65,7 +70,7 @@ fn main() {
 		},
 	};
 
-	handle.print("Starting the queue playback.");
+	handle.print(format!("Playing back all of the songs in [{name}]."));
 	while !files.is_empty() {
 		let (name, contents) = files.remove(generator.usize(0..files.len()));
 		match handles
