@@ -7,7 +7,6 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Playlist {
 	name: Box<str>,
-	main: Option<Box<str>>,
 	song: Vec<Song>,
 }
 
@@ -28,7 +27,7 @@ fn main() {
 	let Some(path) = std::env::args().nth(1) else { return };
 
 	handle.print(format!("Loading and parsing data from [{path}]."));
-	let Playlist { song, name, main } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
+	let Playlist { song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 		Ok(Ok(playlist)) => playlist,
 		Ok(Err(why)) => {
 			handle.print(format!("A fatal error occured whilst attempting to parse the contents of [{path}]; '{why}'"));
@@ -41,13 +40,12 @@ fn main() {
 	};
 
 	handle.print(format!("Loading all of the songs in [{name}]."));
-	let main = main.unwrap_or_default();
 	let mut files: Vec<(Box<str>, File)> = song
 		.into_iter()
 		.filter_map(|Song { name, file }|
 			{
 				handle.print(format!("Loading the audio contents of [{name}]."));
-				match File::open(fmt_path(format!("{main}{}{file}", std::path::MAIN_SEPARATOR))) {
+				match File::open(fmt_path(file)) {
 					Ok(contents) => Some((name, contents)),
 					Err(why) => {
 						handle.print(format!("An error occured whilst attempting to load the audio contents of [{name}]; '{why}'"));
