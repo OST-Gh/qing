@@ -47,7 +47,7 @@ fn main() {
 		.filter_map(|Song { name, file }|
 			{
 				handle.print(format!("Loading the audio contents of [{name}]."));
-				match File::open(fmt_path(format!("{file}{}{main}", std::path::MAIN_SEPARATOR))) {
+				match File::open(fmt_path(format!("{main}{}{file}", std::path::MAIN_SEPARATOR))) {
 					Ok(contents) => Some((name, contents)),
 					Err(why) => {
 						handle.print(format!("An error occured whilst attempting to load the audio contents of [{name}]; '{why}'"));
