@@ -40,7 +40,7 @@ fn main() {
 				continue
 			},
 			Err(why) => {
-				handle.print(format!("{LINE}An error occured whilst attempting to load the contents [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
+				handle.print(format!("{LINE}An error occured whilst attempting to load the contents of [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
 				continue
 			},
 		};
