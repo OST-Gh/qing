@@ -3,13 +3,22 @@ use std::fs::{ self, File };
 use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
 use serde::Deserialize;
+use rodio::{
+	OutputStream,
+	Decoder,
+	source::{
+		Pausable,
+		Skippable,
+		Source,
+	},
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 pub const LINE: &str = Formatting::UnderLined.enable();
 pub const ENBOLD: &str = Formatting::Bold.enable();
 pub const DISBOLD: &str = Formatting::Bold.disable();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
-struct Playlist {
+struct Songlist {
 	name: Box<str>,
 	song: Vec<Song>,
 }
@@ -19,7 +28,43 @@ struct Song {
 	name: Box<str>,
 	file: Box<str>,
 }
+
+struct Stream {
+	name: Box<str>,
+	file: Skippable<Pausable<Decoder<File>>>,
+}
+
+struct Streamlist {
+	name: Box<str>,
+	song: Vec<Stream>,
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn load(files: impl Iterator<Item = impl AsRef<str>>) -> Vec<Streamlist> {
+	let mut generator = fastrand::Rng::new();
+	files
+		.filter_map(|path|
+			{
+				let Songlist { name, mut song } = fs::read_to_string(fmt_path(path))
+					.ok()?
+					.pipe(|ref contents| toml::from_str(contents))
+					.ok()?;
+				let mut new = Vec::with_capacity(song.len());
+				while !song.is_empty() {
+					let song = song.swap_remove(generator.usize(0..song.len()));
+					let file = File::open(fmt_path(song.file))
+						.ok()?
+						.pipe(Decoder::new)
+						.ok()?
+						.pausable(false)
+						.skippable();
+					new.push(Stream { name: song.name, file })
+				}
+				Some(Streamlist { name, song: new })
+			}
+		)
+		.collect()
+}
+
 fn main() {
 	let handle = custom![
 		'\r',
@@ -33,7 +78,7 @@ fn main() {
 	for path in std::env::args().skip(1) {
 
 		handle.print(format!("Loading and parsing data from [{path}]."));
-		let Playlist { song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
+		let Songlist { song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => {
 				handle.print(format!("{LINE}An error occured whilst attempting to parse the contents of [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
@@ -66,7 +111,7 @@ fn main() {
 		let mut generator = fastrand::Rng::new();
 
 		handle.print("Determining the output device.");
-		let handles = match rodio::OutputStream::try_default() {
+		let handles = match OutputStream::try_default() {
 			Ok(handles) => handles,
 			Err(why) => {
 				handle.print(format!("{LINE}A fatal error occured whilst attempting to determine the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));

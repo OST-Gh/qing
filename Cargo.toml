@@ -15,6 +15,7 @@ serde = { version = "1", features = ["derive"], default-features = false }
 toml = { version = "*", features = ["parse"], default-features = false }
 rodio = { version = "*", features = ["mp3", "wav"], default-features = false }
 fastrand = "2"
+console = "*"
 
 [profile.release]
 opt-level = "z"
