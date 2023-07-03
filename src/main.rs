@@ -3,6 +3,15 @@ use std::fs::{ self, File };
 use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
 use serde::Deserialize;
+use rodio::{
+	OutputStream,
+	Decoder,
+	source::{
+		Pausable,
+		Skippable,
+		Source,
+	},
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 pub const LINE: &str = Formatting::UnderLined.enable();
 pub const ENBOLD: &str = Formatting::Bold.enable();
@@ -19,7 +28,43 @@ struct Song {
 	name: Box<str>,
 	file: Box<str>,
 }
+
+struct Stream {
+	name: Box<str>,
+	file: Skippable<Pausable<Decoder<File>>>,
+}
+
+struct Streamlist {
+	name: Box<str>,
+	song: Vec<Stream>,
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn load(files: impl Iterator<Item = impl AsRef<str>>) -> Vec<Streamlist> {
+	let mut generator = fastrand::Rng::new();
+	files
+		.filter_map(|path|
+			{
+				let Songlist { name, mut song } = fs::read_to_string(fmt_path(path))
+					.ok()?
+					.pipe(|ref contents| toml::from_str(contents))
+					.ok()?;
+				let mut new = Vec::with_capacity(song.len());
+				while !song.is_empty() {
+					let song = song.swap_remove(generator.usize(0..song.len()));
+					let file = File::open(fmt_path(song.file))
+						.ok()?
+						.pipe(Decoder::new)
+						.ok()?
+						.pausable(false)
+						.skippable();
+					new.push(Stream { name: song.name, file })
+				}
+				Some(Streamlist { name, song: new })
+			}
+		)
+		.collect()
+}
+
 fn main() {
 	let handle = custom![
 		'\r',
@@ -66,29 +111,12 @@ fn main() {
 		let mut generator = fastrand::Rng::new();
 
 		handle.print("Determining the output device.");
-		let (output, config) = {
-			let host = cpal::default_host();
-			match (host.default_output_device(), host.default_output_config()) {
-				(Ok(output), Ok(config)) => (output, config),
-				(Err(why), Ok(_)) => {
-					handle.print(format!("{LINE}A fatal error occured whilst attempting to determine the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));
-					return
-				},
-				(Ok(_), Err(why)) => {
-					handle.print(format!("{LINE}A fatal error occured whilst attempting to determine the default audio output settings; '{ENBOLD}{why}{DISBOLD}'"));
-					return
-				},
-				(Err(output_why), Err(config_why)) => {
-					handle.print(format!("{LINE}Two fatal errors occured whilst attempting to determine the default audio output device and settings; '{ENBOLD}{output_why}{DISBOLD}', '{ENBOLD}{config_why}{DISBOLD}'"));
-					return
-				},
-			}
-		};
-
-		let config = cpal::StreamConfig {
-			channels: 2,
-			sample_rate,
-			buffer_size: cpal::BufferSize::Default,
+		let handles = match OutputStream::try_default() {
+			Ok(handles) => handles,
+			Err(why) => {
+				handle.print(format!("{LINE}A fatal error occured whilst attempting to determine the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));
+				return
+			},
 		};
 
 		handle.print(format!("Playing back all of the songs in [{name}]."));
