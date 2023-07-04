@@ -170,45 +170,43 @@ fn main() {
 				},
 			};
 
-			match handles
-				.1
-				.play_once(contents)
-			{
-				Ok(playback) => 'controls: {
-					handle.print(format!("Playing back the audio contents of [{name}]."));
-					let mut measure = Instant::now();
-					let mut elapsed = measure.elapsed();
-					while elapsed <= duration {
-						if !playback.is_paused() { elapsed = measure.elapsed() }
-						match receiver.try_recv() {
-							Ok(Signal::ManualExit) => break 'playback,
-							Ok(Signal::TogglePlayback) => if playback.is_paused() {
-								measure = Instant::now();
-								playback.play();
-							} else {
-								duration -= elapsed;
-								elapsed = Duration::ZERO;
-								playback.pause()
-							},
-							Ok(Signal::SkipNext) => break,
-							Ok(Signal::SkipBack) => {
-								if index > 0 { index -= 1 };
-								break 'controls
+			'controls: {
+				match handles
+					.1
+					.play_once(contents)
+				{
+					Ok(playback) => {
+						handle.print(format!("Playing back the audio contents of [{name}]."));
+						let mut measure = Instant::now();
+						let mut elapsed = measure.elapsed();
+						while elapsed <= duration {
+							if !playback.is_paused() { elapsed = measure.elapsed() }
+							match receiver.try_recv() {
+								Ok(Signal::ManualExit) => break 'playback,
+								Ok(Signal::TogglePlayback) => if playback.is_paused() {
+									measure = Instant::now();
+									playback.play();
+								} else {
+									duration -= elapsed;
+									elapsed = Duration::ZERO;
+									playback.pause()
+								},
+								Ok(Signal::SkipNext) => break,
+								Ok(Signal::SkipBack) => {
+									if index > 0 { index -= 1 };
+									break 'controls
+								}
+								Err(TryRecvError::Empty) => continue,
+								Err(why) => {
+									handle.print(format!("{LINE}A fatal error occured whilst attempting to receive a signal from the playback control thread; '{ENBOLD}{why}{DISBOLD}'"));
+									break 'playback
+								},
 							}
-							Err(TryRecvError::Empty) => continue,
-							Err(why) => {
-								handle.print(format!("{LINE}A fatal error occured whilst attempting to receive a signal from the playback control thread; '{ENBOLD}{why}{DISBOLD}'"));
-								break 'playback
-							},
 						}
-					}
-					index += 1;
-				},
-				Err(why) => {
-					handle.print(format!("{LINE}An error occured whilst attempting to playback [{name}] from the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));
-					index += 1;
-					continue
-				},
+					},
+					Err(why) => handle.print(format!("{LINE}An error occured whilst attempting to playback [{name}] from the default audio output device; '{ENBOLD}{why}{DISBOLD}'")),
+				}
+				index += 1;
 			}
 		}
 		handle.print('\0');
