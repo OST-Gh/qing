@@ -58,29 +58,32 @@ macro_rules! log {
 				now.day(),
 				now.month(),
 				now.year(),
-			)
+			);
 		}
 	};
-	(err: $message: expr => $($why: ident)+) => {
+	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
 			log!();
-			print!(" \x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to {};", $message);
+			print!(concat!(" \x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
 			println!("\0");
 		}
 	};
-	(none) => {
+	(info$([$($visible: ident)+])?: $message: literal) => {
 		{
 			log!();
-			println!("\0");
+			println!(concat!(" \x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?);
 		}
 	};
-	(info: $message: expr) => {
+	($($_: tt)+) => {
 		{
-			log!();
-			println!(" \x1b[38;2;254;205;33m{}\0", $message);
+			$(
+				stringify!($_);
+				log!();
+				println!("\0");
+			)+
 		}
-	}
+	};
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
@@ -146,25 +149,24 @@ fn main() {
 			return
 		},
 	};
-	log!(none);
-	log!(none);
+	log!(,,);
 
 	'playback: for path in std::env::args().skip(1) {
 
-		log!(info: format!("Loading and parsing data from [{path}]."));
+		log!(info[path]: "Loading and parsing data from [{path}].");
 		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => {
-				log!(err: format!("parse the contents of [{path}]") => why);
+				log!(err[path]: "parse the contents of [{path}]" => why);
 				continue
 			},
 			Err(why) => {
-				log!(err: format!("load the contents of [{path}]") => why);
+				log!(err[path]: "load the contents of [{path}]" => why);
 				continue
 			},
 		};
 
-		log!(info: format!("Shuffling all of the songs in [{name}]."));
+		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let (length, song) = {
 			let length = song.len();
 			let mut new = Vec::with_capacity(length);
@@ -175,15 +177,15 @@ fn main() {
 		};
 		let mut index = 0;
 
-		log!(info: format!("Playing back all of the songs in [{name}]."));
-		log!(none);
+		log!(info[name]: "Playing back all of the songs in [{name}].");
+		log!(,);
 		'playlist: while index < length {
 			let Song { name, file } = song
 				.get(index)
 				.unwrap() /* unwrap safe */;
 
-			log!(none);
-			log!(info: format!("Loading the audio contents and properties of [{name}]."));
+			log!(,);
+			log!(info[name]: "Loading the audio contents and properties of [{name}].");
 			let (contents, mut duration) = 'load: {
 				let formatted = fmt_path(file);
 				match (File::open(&formatted), read_from_path(formatted)) {
@@ -193,9 +195,9 @@ fn main() {
 							.properties()
 							.duration(),
 					),
-					(Err(why), Ok(_)) => log!(err: format!("load the audio contents of [{name}]") => why),
-					(Ok(_), Err(why)) => log!(err: format!("load the audio properties of [{name}]") => why),
-					(Err(file_why), Err(info_why)) => log!(err: format!("load the audio contents and properties of [{name}]") => file_why info_why),
+					(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
+					(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
+					(Err(file_why), Err(info_why)) => log!(err[name]: "load the audio contents and properties of [{name}]" => file_why info_why),
 				};
 				index += 1;
 				continue 'playlist
@@ -207,7 +209,7 @@ fn main() {
 					.play_once(contents)
 				{
 					Ok(playback) => {
-						log!(info: format!("Playing back the audio contents of [{name}]."));
+						log!(info[name]: "Playing back the audio contents of [{name}].");
 						let mut measure = Instant::now();
 						let mut elapsed = measure.elapsed();
 						while elapsed <= duration {
@@ -236,14 +238,12 @@ fn main() {
 							}
 						}
 					},
-					Err(why) => log!(err: format!("playback [{name}] from the default audio output device") => why),
+					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
 				}
 				index += 1;
 			}
 		}
-		log!(none);
-		log!(none);
-		log!(none);
+		log!(,,,);
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
