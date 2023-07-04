@@ -3,6 +3,7 @@ use std::{
 	fs::{ self, File },
 	time::{ Duration, Instant },
 	thread::spawn,
+	io::BufReader,
 };
 use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
@@ -39,19 +40,22 @@ struct Song {
 	name: Box<str>,
 	file: Box<str>,
 }
-
-struct Stream {
-	name: Box<str>,
-	file: File,
-	time: Duration,
-}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 enum Signal {
 	ManualExit, // signal sent by pb_ctl to main for indication of the user manually exiting
-	SkipPlayback,
+	SkipNext,
+	SkipBack,
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn shuffle(mut songs: Vec<Song>) -> Vec<Song> {
+	let mut new = Vec::with_capacity(songs.len());
+	let mut generator = Generator::new();
+
+	while !songs.is_empty() { new.push(songs.remove(generator.usize(0..songs.len()))) }
+	new
+}
+
 fn main() {
 	let handle = custom![
 		'\r',
@@ -90,7 +94,8 @@ fn main() {
 						let send_result = match event {
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipPlayback),
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
 							Err(why) => {
 								handle.print(format!("{LINE}An error occured whilst attempting to read an event from the current terminal; '{ENBOLD}{why}{DISBOLD}'"));
 								continue
@@ -105,8 +110,6 @@ fn main() {
 		}
 	);
 
-	let mut generator = Generator::new();
-
 	handle.print("Determining the output device.");
 	let handles = match OutputStream::try_default() {
 		Ok(handles) => handles,
@@ -115,6 +118,7 @@ fn main() {
 			return
 		},
 	};
+	handle.print('\0');
 	handle.print('\0');
 
 	for path in std::env::args().skip(1) {
@@ -132,47 +136,49 @@ fn main() {
 			},
 		};
 
-		handle.print(format!("Loading all of the songs in [{name}]."));
-		let mut files: Vec<Stream> = song
-			.into_iter()
-			.filter_map(|Song { name, file }|
-				{
-					handle.print(format!("Loading the audio contents of [{name}]."));
-					let formatted = fmt_path(file);
-					let contents = match File::open(&formatted) {
-						Ok(contents) => contents,
-						Err(why) => {
-							handle.print(format!("{LINE}An error occured whilst attempting to load the audio contents of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
-							None?
-						},
-					};
-					let duration = match read_from_path(formatted) {
-						Ok(tagged) => tagged
-							.properties()
-							.duration(),
-						Err(why) => {
-							handle.print(format!("{LINE}An error occured whilst attempting to aquire the audio properties of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
-							None?
-						},
-					};
-					Some(Stream { name, file: contents, time: duration })
-				}
-			)
-			.collect();
-		handle.print('\0');
+		handle.print(format!("Shuffling all of the songs in [{name}]."));
+		let song = shuffle(song);
+		let length = song.len();
+		let mut index = 0;
 
 		handle.print(format!("Playing back all of the songs in [{name}]."));
-		'playback: while !files.is_empty() {
-			let Stream { name, file, mut time } = files.remove(generator.usize(0..files.len()));
+		handle.print('\0');
+		'playback: while index < length {
+			let Song { name, file } = song
+				.get(index)
+				.unwrap() /* unwrap safe */;
+
+			handle.print('\0');
+			handle.print(format!("Loading the audio contents of [{name}]."));
+			let formatted = fmt_path(file);
+			let contents = match File::open(&formatted) {
+				Ok(contents) => BufReader::new(contents),
+				Err(why) => {
+					handle.print(format!("{LINE}An error occured whilst attempting to load the audio contents of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
+					index += 1;
+					continue
+				},
+			};
+			let mut duration = match read_from_path(formatted) {
+				Ok(tagged) => tagged
+					.properties()
+					.duration(),
+				Err(why) => {
+					handle.print(format!("{LINE}An error occured whilst attempting to aquire the audio properties of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
+					index += 1;
+					continue
+				},
+			};
+
 			match handles
 				.1
-				.play_once(file)
+				.play_once(contents)
 			{
-				Ok(playback) => {
+				Ok(playback) => 'controls: {
 					handle.print(format!("Playing back the audio contents of [{name}]."));
 					let mut measure = Instant::now();
 					let mut elapsed = measure.elapsed();
-					while elapsed <= time {
+					while elapsed <= duration {
 						if !playback.is_paused() { elapsed = measure.elapsed() }
 						match receiver.try_recv() {
 							Ok(Signal::ManualExit) => break 'playback,
@@ -180,11 +186,15 @@ fn main() {
 								measure = Instant::now();
 								playback.play();
 							} else {
-								time -= elapsed;
+								duration -= elapsed;
 								elapsed = Duration::ZERO;
 								playback.pause()
 							},
-							Ok(Signal::SkipPlayback) => break,
+							Ok(Signal::SkipNext) => break,
+							Ok(Signal::SkipBack) => {
+								if index > 0 { index -= 1 };
+								break 'controls
+							}
 							Err(TryRecvError::Empty) => continue,
 							Err(why) => {
 								handle.print(format!("{LINE}A fatal error occured whilst attempting to receive a signal from the playback control thread; '{ENBOLD}{why}{DISBOLD}'"));
@@ -192,9 +202,11 @@ fn main() {
 							},
 						}
 					}
+					index += 1;
 				},
 				Err(why) => {
 					handle.print(format!("{LINE}An error occured whilst attempting to playback [{name}] from the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));
+					index += 1;
 					continue
 				},
 			}
