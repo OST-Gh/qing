@@ -40,6 +40,7 @@ struct Song {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 enum Signal {
 	ManualExit, // signal sent by pb_ctl to main for indication of the user manually exiting
+	SkipPlaylist,
 	SkipNext,
 	SkipBack,
 	TogglePlayback,
@@ -47,39 +48,24 @@ enum Signal {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 macro_rules! log {
 	() => {
-		print!(
-			"\r{reset}{time}",
-			reset = "\x1b[0m",
-			time = {
-				let now = Utc::now();
-				format!("[{:0>2}:{:0>2}:{:0>2} {:0>2}/{:0>2}/{}]",
-					now.hour(),
-					now.minute(),
-					now.second(),
-					now.day(),
-					now.month(),
-					now.year(),
-				)
-			},
-		)
+		{
+			let now = Utc::now();
+			print!(
+				"\r\x1b[0m[{:0>2}:{:0>2}:{:0>2} {:0>2}/{:0>2}/{}]",
+				now.hour(),
+				now.minute(),
+				now.second(),
+				now.day(),
+				now.month(),
+				now.year(),
+			)
+		}
 	};
 	(err: $message: expr => $($why: ident)+) => {
 		{
 			log!();
-			print!(
-				" {colour}{underline}An error occured whilst attempting to {message};",
-				message = $message,
-				colour = "\x1b[38;2;254;205;33m",
-				underline = "\x1b[4m",
-			);
-			$(
-				print!(
-					" '{enable_bold}{why}{disable_bold}'",
-					why = $why,
-					enable_bold = "\x1b[1m",
-					disable_bold = "\x1b[22m",
-				);
-			)+
+			print!(" \x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to {};", $message);
+			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
 			println!("\0");
 		}
 	};
@@ -92,11 +78,7 @@ macro_rules! log {
 	(info: $message: expr) => {
 		{
 			log!();
-			println!(
-				" {colour}{message}\0",
-				message = $message,
-				colour = "\x1b[38;2;254;205;33m",
-			);
+			println!(" \x1b[38;2;254;205;33m{}\0", $message);
 		}
 	}
 }
@@ -138,9 +120,10 @@ fn main() {
 						};
 						let send_result = match event {
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('/' | 'h'), .. })) => sender.send(Signal::SkipPlaylist),
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
 							Err(why) => {
 								log!(err: "read an event from the current terminal" => why);
 								continue
@@ -194,7 +177,7 @@ fn main() {
 
 		log!(info: format!("Playing back all of the songs in [{name}]."));
 		log!(none);
-		while index < length {
+		'playlist: while index < length {
 			let Song { name, file } = song
 				.get(index)
 				.unwrap() /* unwrap safe */;
@@ -215,7 +198,7 @@ fn main() {
 					(Err(file_why), Err(info_why)) => log!(err: format!("load the audio contents and properties of [{name}]") => file_why info_why),
 				};
 				index += 1;
-				continue 'playback
+				continue 'playlist
 			};
 
 			'controls: {
@@ -231,6 +214,12 @@ fn main() {
 							if !playback.is_paused() { elapsed = measure.elapsed() }
 							match receiver.try_recv() {
 								Ok(Signal::ManualExit) => break 'playback,
+								Ok(Signal::SkipPlaylist) => break 'playlist,
+								Ok(Signal::SkipNext) => break,
+								Ok(Signal::SkipBack) => {
+									if index > 0 { index -= 1 };
+									break 'controls
+								},
 								Ok(Signal::TogglePlayback) => if playback.is_paused() {
 									measure = Instant::now();
 									playback.play();
@@ -239,11 +228,6 @@ fn main() {
 									elapsed = Duration::ZERO;
 									playback.pause()
 								},
-								Ok(Signal::SkipNext) => break,
-								Ok(Signal::SkipBack) => {
-									if index > 0 { index -= 1 };
-									break 'controls
-								}
 								Err(TryRecvError::Empty) => continue,
 								Err(why) => {
 									log!(err: "receive a signal from the playback control thread" => why);
@@ -265,6 +249,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
 	let _ = playback_control.join();
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) };
-	log!(none)
+	println!("\r\x1b[0m\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
