@@ -172,18 +172,19 @@ fn main() {
 					handle.print(format!("Playing back the audio contents of [{name}]."));
 					let mut measure = Instant::now();
 					let mut elapsed = measure.elapsed();
-					while elapsed < time {
-						if playback.is_paused() { elapsed = Duration::ZERO } else { elapsed = measure.elapsed() }
+					while elapsed <= time {
+						if !playback.is_paused() { elapsed = measure.elapsed() }
 						match receiver.try_recv() {
 							Ok(Signal::ManualExit) => {
 								drop(playback);
 								break 'playback
 							},
 							Ok(Signal::TogglePlayback) => if playback.is_paused() {
-								playback.play();
 								measure = Instant::now();
+								playback.play();
 							} else {
-								time -= measure.elapsed();
+								time -= elapsed;
+								elapsed = Duration::ZERO;
 								playback.pause()
 							},
 							Ok(Signal::SkipPlayback) => {
@@ -210,5 +211,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { handle.print(format!("{LINE}An error occured whilst attempting to send the exit signal to the playback control thread; '{ENBOLD}{why}{DISBOLD}'")) };
 	let _ = playback_control.join();
 	if let Err(why) = disable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to disable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
+	handle.print('\0');
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
