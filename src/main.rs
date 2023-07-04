@@ -48,14 +48,6 @@ enum Signal {
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-fn shuffle(mut songs: Vec<Song>) -> Vec<Song> {
-	let mut new = Vec::with_capacity(songs.len());
-	let mut generator = Generator::new();
-
-	while !songs.is_empty() { new.push(songs.remove(generator.usize(0..songs.len()))) }
-	new
-}
-
 fn main() {
 	let handle = custom![
 		'\r',
@@ -124,7 +116,7 @@ fn main() {
 	for path in std::env::args().skip(1) {
 
 		handle.print(format!("Loading and parsing data from [{path}]."));
-		let Songlist { song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
+		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => {
 				handle.print(format!("{LINE}An error occured whilst attempting to parse the contents of [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
@@ -137,8 +129,14 @@ fn main() {
 		};
 
 		handle.print(format!("Shuffling all of the songs in [{name}]."));
-		let song = shuffle(song);
-		let length = song.len();
+		let (length, song) = {
+			let length = song.len();
+			let mut new = Vec::with_capacity(length);
+			let mut generator = Generator::new();
+
+			while !song.is_empty() { new.push(song.remove(generator.usize(0..song.len()))) }
+			(length, new)
+		};
 		let mut index = 0;
 
 		handle.print(format!("Playing back all of the songs in [{name}]."));
@@ -149,25 +147,28 @@ fn main() {
 				.unwrap() /* unwrap safe */;
 
 			handle.print('\0');
-			handle.print(format!("Loading the audio contents of [{name}]."));
-			let formatted = fmt_path(file);
-			let contents = match File::open(&formatted) {
-				Ok(contents) => BufReader::new(contents),
-				Err(why) => {
-					handle.print(format!("{LINE}An error occured whilst attempting to load the audio contents of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
-					index += 1;
-					continue
-				},
-			};
-			let mut duration = match read_from_path(formatted) {
-				Ok(tagged) => tagged
-					.properties()
-					.duration(),
-				Err(why) => {
-					handle.print(format!("{LINE}An error occured whilst attempting to aquire the audio properties of [{name}]; '{ENBOLD}{why}{DISBOLD}'"));
-					index += 1;
-					continue
-				},
+			handle.print(format!("Loading the audio contents and properties of [{name}]."));
+			let (contents, mut duration) = {
+				let formatted = fmt_path(file);
+				match (File::open(&formatted), read_from_path(formatted)) {
+					(Ok(contents), Ok(info)) => (
+						BufReader::new(contents),
+						info
+							.properties()
+							.duration(),
+					),
+					(file, info) => {
+						handle.print(
+							format!(
+								"{LINE}An error occured whilst attempting to load the audio contents and properties of [{name}];{}{}",
+								if let Err(why) = file { format!(" '{ENBOLD}{why}{DISBOLD}'") } else { String::new() },
+								if let Err(why) = info { format!(" '{ENBOLD}{why}{DISBOLD}'") } else { String::new() },
+							)
+						);
+						index += 1;
+						continue
+					},
+				}
 			};
 
 			'controls: {
