@@ -1,4 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//! NOTE: crt in raw mode behaves strangely or maps <100% keyboard maps to 100% maps, e.g.: backspace in raw-mode = h
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
@@ -109,35 +111,33 @@ fn main() {
 	let (sender, receiver) = unbounded();
 	let (exit_sender, exit_receiver) = unbounded();
 	let playback_control = spawn(
-		move || {
-			loop {
-				match exit_receiver.try_recv() {
-					Ok(_) => break,
-					Err(TryRecvError::Empty) => {
-						let event = match event::poll(Duration::ZERO) {
-							Ok(truth) => if truth { event::read() } else { continue },
-							Err(why) => {
-								log!(err: "poll an event from the current terminal" => why);
-								continue
-							},
-						};
-						let send_result = match event {
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('/' | 'h'), .. })) => sender.send(Signal::SkipPlaylist),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
-							Err(why) => {
-								log!(err: "read an event from the current terminal" => why);
-								continue
-							},
-							_ => continue,
-						};
-						if let Err(why) = send_result { log!(err: "send a signal to the playback" => why) };
-					},
-					Err(why) => log!(err: "receive a signal from the main thread" => why),
-				};
-			}
+		move || loop {
+			match exit_receiver.try_recv() {
+				Ok(_) => break,
+				Err(TryRecvError::Empty) => {
+					let event = match event::poll(Duration::ZERO) {
+						Ok(truth) => if truth { event::read() } else { continue },
+						Err(why) => {
+							log!(err: "poll an event from the current terminal" => why);
+							continue
+						},
+					};
+					let send_result = match event {
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('/' | 'h'), .. })) => sender.send(Signal::SkipPlaylist),
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
+						Err(why) => {
+							log!(err: "read an event from the current terminal" => why);
+							continue
+						},
+						_ => continue,
+					};
+					if let Err(why) = send_result { log!(err: "send a signal to the playback" => why) };
+				},
+				Err(why) => log!(err: "receive a signal from the main thread" => why),
+			};
 		}
 	);
 
@@ -172,7 +172,7 @@ fn main() {
 			let mut new = Vec::with_capacity(length);
 			let mut generator = Generator::new();
 
-			while !song.is_empty() { new.push(song.remove(generator.usize(0..song.len()))) }
+			while !song.is_empty() { new.push(song.swap_remove(generator.usize(0..song.len()))) }
 			(length, new)
 		};
 		let mut index = 0;
