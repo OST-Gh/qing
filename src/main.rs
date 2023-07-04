@@ -166,7 +166,7 @@ fn main() {
 	log!(none);
 	log!(none);
 
-	for path in std::env::args().skip(1) {
+	'playback: for path in std::env::args().skip(1) {
 
 		log!(info: format!("Loading and parsing data from [{path}]."));
 		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
@@ -194,7 +194,7 @@ fn main() {
 
 		log!(info: format!("Playing back all of the songs in [{name}]."));
 		log!(none);
-		'playback: while index < length {
+		while index < length {
 			let Song { name, file } = song
 				.get(index)
 				.unwrap() /* unwrap safe */;
@@ -257,7 +257,9 @@ fn main() {
 				index += 1;
 			}
 		}
-		log!(none)
+		log!(none);
+		log!(none);
+		log!(none);
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
