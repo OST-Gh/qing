@@ -1,11 +1,10 @@
 # qing, a (hopefully) minimalist toml based song shuffler
 
 ## Usage: qing [playlist.toml...]
-## playlist.toml:
 ```toml
 # qing currently suppports wav and mp3 files
 
-# Playlist.toml
+# playlist.toml
 # NOTE: does not need to be a toml file as long it is the toml format
 
 name = "Foo" # name of the playlist
