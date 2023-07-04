@@ -175,10 +175,7 @@ fn main() {
 					while elapsed <= time {
 						if !playback.is_paused() { elapsed = measure.elapsed() }
 						match receiver.try_recv() {
-							Ok(Signal::ManualExit) => {
-								drop(playback);
-								break 'playback
-							},
+							Ok(Signal::ManualExit) => break 'playback,
 							Ok(Signal::TogglePlayback) => if playback.is_paused() {
 								measure = Instant::now();
 								playback.play();
@@ -187,10 +184,7 @@ fn main() {
 								elapsed = Duration::ZERO;
 								playback.pause()
 							},
-							Ok(Signal::SkipPlayback) => {
-								playback.stop();
-								break
-							},
+							Ok(Signal::SkipPlayback) => break,
 							Err(TryRecvError::Empty) => continue,
 							Err(why) => {
 								handle.print(format!("{LINE}A fatal error occured whilst attempting to receive a signal from the playback control thread; '{ENBOLD}{why}{DISBOLD}'"));
