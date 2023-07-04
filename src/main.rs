@@ -7,7 +7,6 @@ use std::{
 	io::BufReader,
 	env::var,
 };
-use oxygen::*;
 use serde::Deserialize;
 use rodio::OutputStream;
 use crossterm::{
@@ -25,19 +24,7 @@ use crossterm::{
 use crossbeam_channel::{ unbounded, TryRecvError };
 use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-pub const LINE: &str = Formatting::UnderLined.enable();
-pub const ENBOLD: &str = Formatting::Bold.enable(); pub const DISBOLD: &str = Formatting::Bold.disable();
-
-pub const HANDLE: fn() -> Handle<Custom> = || Handle::from(
-	custom![
-		'\r',
-		Time::from(' '),
-		Colour::from(Empty)
-			.colour(colours::QING)
-			.terminated(false),
-	]
-);
+use chrono::{ Datelike, Timelike, Utc };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 struct Songlist {
@@ -58,6 +45,62 @@ enum Signal {
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+macro_rules! log {
+	() => {
+		print!(
+			"\r{reset}{time}",
+			reset = "\x1b[0m",
+			time = {
+				let now = Utc::now();
+				format!("[{:0>2}:{:0>2}:{:0>2} {:0>2}/{:0>2}/{}]",
+					now.hour(),
+					now.minute(),
+					now.second(),
+					now.day(),
+					now.month(),
+					now.year(),
+				)
+			},
+		)
+	};
+	(err: $message: expr => $($why: ident)+) => {
+		{
+			log!();
+			print!(
+				" {colour}{underline}An error occured whilst attempting to {message};",
+				message = $message,
+				colour = "\x1b[38;2;254;205;33m",
+				underline = "\x1b[4m",
+			);
+			$(
+				print!(
+					" '{enable_bold}{why}{disable_bold}'",
+					why = $why,
+					enable_bold = "\x1b[1m",
+					disable_bold = "\x1b[22m",
+				);
+			)+
+			println!("\0");
+		}
+	};
+	(none) => {
+		{
+			log!();
+			println!("\0");
+		}
+	};
+	(info: $message: expr) => {
+		{
+			log!();
+			println!(
+				" {colour}{message}\0",
+				message = $message,
+				colour = "\x1b[38;2;254;205;33m",
+			);
+		}
+	}
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 	text
 		.as_ref()
@@ -75,15 +118,13 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 }
 
 fn main() {
-	let handle = HANDLE();
-	if let Err(why) = enable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to enable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
+	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return };
 
-	handle.print(format!("Spinning up the playback control thread."));
+	log!(info: "Spinning up the playback control thread.");
 	let (sender, receiver) = unbounded();
 	let (exit_sender, exit_receiver) = unbounded();
 	let playback_control = spawn(
 		move || {
-			let handle = HANDLE();
 			loop {
 				match exit_receiver.try_recv() {
 					Ok(_) => break,
@@ -91,7 +132,7 @@ fn main() {
 						let event = match event::poll(Duration::ZERO) {
 							Ok(truth) => if truth { event::read() } else { continue },
 							Err(why) => {
-								handle.print(format!("{LINE}An error occured whilst attempting to poll an event from the current terminal; '{ENBOLD}{why}{DISBOLD}'"));
+								log!(err: "poll an event from the current terminal" => why);
 								continue
 							},
 						};
@@ -101,46 +142,46 @@ fn main() {
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
 							Err(why) => {
-								handle.print(format!("{LINE}An error occured whilst attempting to read an event from the current terminal; '{ENBOLD}{why}{DISBOLD}'"));
+								log!(err: "read an event from the current terminal" => why);
 								continue
 							},
 							_ => continue,
 						};
-						if let Err(why) = send_result { handle.print(format!("{LINE}An error occured whilst attempting to send a signal to the playback; '{ENBOLD}{why}{DISBOLD}'")) };
+						if let Err(why) = send_result { log!(err: "send a signal to the playback" => why) };
 					},
-					Err(why) => handle.print(format!("{LINE}An error occured whilst attempting to receive a signal from the main thread; '{ENBOLD}{why}{DISBOLD}'")),
+					Err(why) => log!(err: "receive a signal from the main thread" => why),
 				};
 			}
 		}
 	);
 
-	handle.print("Determining the output device.");
+	log!(info: "Determining the output device.");
 	let handles = match OutputStream::try_default() {
 		Ok(handles) => handles,
 		Err(why) => {
-			handle.print(format!("{LINE}A fatal error occured whilst attempting to determine the default audio output device; '{ENBOLD}{why}{DISBOLD}'"));
+			log!(err: "determine the default audio output device" => why);
 			return
 		},
 	};
-	handle.print('\0');
-	handle.print('\0');
+	log!(none);
+	log!(none);
 
 	for path in std::env::args().skip(1) {
 
-		handle.print(format!("Loading and parsing data from [{path}]."));
+		log!(info: format!("Loading and parsing data from [{path}]."));
 		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => {
-				handle.print(format!("{LINE}An error occured whilst attempting to parse the contents of [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
+				log!(err: format!("parse the contents of [{path}]") => why);
 				continue
 			},
 			Err(why) => {
-				handle.print(format!("{LINE}An error occured whilst attempting to load the contents of [{path}]; '{ENBOLD}{why}{DISBOLD}'"));
+				log!(err: format!("load the contents of [{path}]") => why);
 				continue
 			},
 		};
 
-		handle.print(format!("Shuffling all of the songs in [{name}]."));
+		log!(info: format!("Shuffling all of the songs in [{name}]."));
 		let (length, song) = {
 			let length = song.len();
 			let mut new = Vec::with_capacity(length);
@@ -151,36 +192,30 @@ fn main() {
 		};
 		let mut index = 0;
 
-		handle.print(format!("Playing back all of the songs in [{name}]."));
-		handle.print('\0');
+		log!(info: format!("Playing back all of the songs in [{name}]."));
+		log!(none);
 		'playback: while index < length {
 			let Song { name, file } = song
 				.get(index)
 				.unwrap() /* unwrap safe */;
 
-			handle.print('\0');
-			handle.print(format!("Loading the audio contents and properties of [{name}]."));
-			let (contents, mut duration) = {
+			log!(none);
+			log!(info: format!("Loading the audio contents and properties of [{name}]."));
+			let (contents, mut duration) = 'load: {
 				let formatted = fmt_path(file);
 				match (File::open(&formatted), read_from_path(formatted)) {
-					(Ok(contents), Ok(info)) => (
+					(Ok(contents), Ok(info)) => break 'load (
 						BufReader::new(contents),
 						info
 							.properties()
 							.duration(),
 					),
-					(file, info) => {
-						handle.print(
-							format!(
-								"{LINE}An error occured whilst attempting to load the audio contents and properties of [{name}];{}{}",
-								if let Err(why) = file { format!(" '{ENBOLD}{why}{DISBOLD}'") } else { String::new() },
-								if let Err(why) = info { format!(" '{ENBOLD}{why}{DISBOLD}'") } else { String::new() },
-							)
-						);
-						index += 1;
-						continue
-					},
-				}
+					(Err(why), Ok(_)) => log!(err: format!("load the audio contents of [{name}]") => why),
+					(Ok(_), Err(why)) => log!(err: format!("load the audio properties of [{name}]") => why),
+					(Err(file_why), Err(info_why)) => log!(err: format!("load the audio contents and properties of [{name}]") => file_why info_why),
+				};
+				index += 1;
+				continue 'playback
 			};
 
 			'controls: {
@@ -189,7 +224,7 @@ fn main() {
 					.play_once(contents)
 				{
 					Ok(playback) => {
-						handle.print(format!("Playing back the audio contents of [{name}]."));
+						log!(info: format!("Playing back the audio contents of [{name}]."));
 						let mut measure = Instant::now();
 						let mut elapsed = measure.elapsed();
 						while elapsed <= duration {
@@ -211,23 +246,23 @@ fn main() {
 								}
 								Err(TryRecvError::Empty) => continue,
 								Err(why) => {
-									handle.print(format!("{LINE}A fatal error occured whilst attempting to receive a signal from the playback control thread; '{ENBOLD}{why}{DISBOLD}'"));
+									log!(err: "receive a signal from the playback control thread" => why);
 									break 'playback
 								},
 							}
 						}
 					},
-					Err(why) => handle.print(format!("{LINE}An error occured whilst attempting to playback [{name}] from the default audio output device; '{ENBOLD}{why}{DISBOLD}'")),
+					Err(why) => log!(err: format!("playback [{name}] from the default audio output device") => why),
 				}
 				index += 1;
 			}
 		}
-		handle.print('\0');
+		log!(none)
 	}
 
-	if let Err(why) = exit_sender.send(0) { handle.print(format!("{LINE}An error occured whilst attempting to send the exit signal to the playback control thread; '{ENBOLD}{why}{DISBOLD}'")) };
+	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
 	let _ = playback_control.join();
-	if let Err(why) = disable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to disable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
-	handle.print('\0');
+	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) };
+	log!(none)
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
