@@ -119,19 +119,19 @@ fn main() {
 							continue
 						},
 					};
-					let send_result = match event {
-						Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
-						Ok(Event::Key(KeyEvent { code: KeyCode::Char('/' | 'h'), .. })) => sender.send(Signal::SkipPlaylist),
-						Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => sender.send(Signal::SkipNext),
-						Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => sender.send(Signal::SkipBack),
-						Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
+					let signal = match event {
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => Signal::ManualExit,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('/' | 'h'), .. })) => Signal::SkipPlaylist,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('.' | 'l'), .. })) => Signal::SkipNext,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char(',' | 'j'), .. })) => Signal::SkipBack,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => Signal::TogglePlayback,
 						Err(why) => {
 							log!(err: "read an event from the current terminal" => why);
 							continue
 						},
 						_ => continue,
 					};
-					if let Err(why) = send_result { log!(err: "send a signal to the playback" => why) };
+					if let Err(why) = sender.send(signal) { log!(err: "send a signal to the playback" => why) };
 				},
 				Err(why) => log!(err: "receive a signal from the main thread" => why),
 			};
@@ -216,11 +216,10 @@ fn main() {
 									if index > 0 { index -= 1 };
 									break 'controls
 								},
-								Ok(Signal::TogglePlayback) if playback.is_paused() => {
+								Ok(Signal::TogglePlayback) => if playback.is_paused() {
 									measure = Instant::now();
 									playback.play();
-								},
-								Ok(Signal::TogglePlayback) => {
+								} else {
 									duration -= elapsed;
 									elapsed = Duration::ZERO;
 									playback.pause()
