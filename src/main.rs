@@ -61,6 +61,7 @@ fn main() {
 			.terminated(false),
 	]
 		.pipe(Handle::from);
+	if let Err(why) = enable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to enable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
 
 	handle.print(format!("Spinning up the playback control thread."));
 	let (sender, receiver) = unbounded();
@@ -79,9 +80,13 @@ fn main() {
 				match exit_receiver.try_recv() {
 					Ok(_) => break,
 					Err(TryRecvError::Empty) => {
-						if let Err(why) = enable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to enable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
-						let event = event::read();
-						if let Err(why) = disable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to disable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
+						let event = match event::poll(Duration::ZERO) {
+							Ok(truth) => if truth { event::read() } else { continue },
+							Err(why) => {
+								handle.print(format!("{LINE}An error occured whilst attempting to poll an event from the current terminal; '{ENBOLD}{why}{DISBOLD}'"));
+								continue
+							},
+						};
 						let send_result = match event {
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char('q' | 'c'), .. })) => sender.send(Signal::ManualExit),
 							Ok(Event::Key(KeyEvent { code: KeyCode::Char(' ' | 'k'), .. })) => sender.send(Signal::TogglePlayback),
@@ -110,6 +115,7 @@ fn main() {
 			return
 		},
 	};
+	handle.print('\0');
 
 	for path in std::env::args().skip(1) {
 
@@ -157,21 +163,29 @@ fn main() {
 
 		handle.print(format!("Playing back all of the songs in [{name}]."));
 		'playback: while !files.is_empty() {
-			let Stream { name, file, time } = files.remove(generator.usize(0..files.len()));
+			let Stream { name, file, mut time } = files.remove(generator.usize(0..files.len()));
 			match handles
 				.1
 				.play_once(file)
 			{
 				Ok(playback) => {
 					handle.print(format!("Playing back the audio contents of [{name}]."));
-					let measure = Instant::now();
-					while measure.elapsed() < time {
+					let mut measure = Instant::now();
+					let mut elapsed = measure.elapsed();
+					while elapsed < time {
+						if playback.is_paused() { elapsed = Duration::ZERO } else { elapsed = measure.elapsed() }
 						match receiver.try_recv() {
 							Ok(Signal::ManualExit) => {
 								drop(playback);
 								break 'playback
 							},
-							Ok(Signal::TogglePlayback) => if playback.is_paused() { playback.play() } else { playback.pause() },
+							Ok(Signal::TogglePlayback) => if playback.is_paused() {
+								playback.play();
+								measure = Instant::now();
+							} else {
+								time -= measure.elapsed();
+								playback.pause()
+							},
 							Ok(Signal::SkipPlayback) => {
 								playback.stop();
 								break
@@ -190,9 +204,11 @@ fn main() {
 				},
 			}
 		}
-
+		handle.print('\0');
 	}
+
 	if let Err(why) = exit_sender.send(0) { handle.print(format!("{LINE}An error occured whilst attempting to send the exit signal to the playback control thread; '{ENBOLD}{why}{DISBOLD}'")) };
 	let _ = playback_control.join();
+	if let Err(why) = disable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to disable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
