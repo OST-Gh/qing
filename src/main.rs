@@ -1,11 +1,12 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	fs::{ self, File },
+	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
 	thread::spawn,
 	io::BufReader,
+	env::var,
 };
-use nitrogen::{ fmt_path, traits::* };
 use oxygen::*;
 use serde::Deserialize;
 use rodio::OutputStream;
@@ -26,8 +27,17 @@ use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 pub const LINE: &str = Formatting::UnderLined.enable();
-pub const ENBOLD: &str = Formatting::Bold.enable();
-pub const DISBOLD: &str = Formatting::Bold.disable();
+pub const ENBOLD: &str = Formatting::Bold.enable(); pub const DISBOLD: &str = Formatting::Bold.disable();
+
+pub const HANDLE: fn() -> Handle<Custom> = || Handle::from(
+	custom![
+		'\r',
+		Time::from(' '),
+		Colour::from(Empty)
+			.colour(colours::QING)
+			.terminated(false),
+	]
+);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 struct Songlist {
@@ -48,15 +58,24 @@ enum Signal {
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn fmt_path(text: impl AsRef<str>) -> PathBuf {
+	text
+		.as_ref()
+		.split(MAIN_SEPARATOR_STR)
+		.filter_map(|part|
+			{
+				if part == "~" { return var("HOME").ok() };
+				if part.starts_with('$') { return var(&part[1..]).ok() };
+				Some(String::from(part))
+			}
+		)
+		.collect::<Vec<String>>()
+		.join(MAIN_SEPARATOR_STR)
+		.into()
+}
+
 fn main() {
-	let handle = custom![
-		'\r',
-		Time::from(' '),
-		Colour::from(Empty)
-			.colour(colours::QING)
-			.terminated(false),
-	]
-		.pipe(Handle::from);
+	let handle = HANDLE();
 	if let Err(why) = enable_raw_mode() { handle.print(format!("{LINE}An error occured whilst attempting to enable the raw mode of the current terminal; '{ENBOLD}{why}{DISBOLD}'")) };
 
 	handle.print(format!("Spinning up the playback control thread."));
@@ -64,14 +83,7 @@ fn main() {
 	let (exit_sender, exit_receiver) = unbounded();
 	let playback_control = spawn(
 		move || {
-			let handle = custom![
-				'\r',
-				Time::from(' '),
-				Colour::from(Empty)
-					.colour(colours::QING)
-					.terminated(false),
-			]
-				.pipe(Handle::from);
+			let handle = HANDLE();
 			loop {
 				match exit_receiver.try_recv() {
 					Ok(_) => break,
