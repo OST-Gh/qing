@@ -2,8 +2,6 @@
 
 ## Usage: qing [playlist.toml...]
 ```toml
-# qing currently suppports wav and mp3 files
-
 # playlist.toml
 # NOTE: does not need to be a toml file as long it is the toml format
 
