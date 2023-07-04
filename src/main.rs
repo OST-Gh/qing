@@ -26,7 +26,7 @@ use crossterm::{
 use crossbeam_channel::{ unbounded, TryRecvError };
 use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
-use chrono::{ Datelike, Timelike, Utc };
+use chrono::{ Timelike, Utc };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 struct Songlist {
@@ -53,13 +53,10 @@ macro_rules! log {
 		{
 			let now = Utc::now();
 			print!(
-				"\r\x1b[0m[{:0>2}:{:0>2}:{:0>2} {:0>2}/{:0>2}/{}]",
+				"\r\x1b[0m[{:0>2}:{:0>2}:{:0>2}]",
 				now.hour(),
 				now.minute(),
 				now.second(),
-				now.day(),
-				now.month(),
-				now.year(),
 			);
 		}
 	};
@@ -154,16 +151,13 @@ fn main() {
 	'playback: for path in std::env::args().skip(1) {
 
 		log!(info[path]: "Loading and parsing data from [{path}].");
-		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
-			Ok(Ok(playlist)) => playlist,
-			Ok(Err(why)) => {
-				log!(err[path]: "parse the contents of [{path}]" => why);
-				continue
-			},
-			Err(why) => {
-				log!(err[path]: "load the contents of [{path}]" => why);
-				continue
-			},
+		let Songlist { mut song, name } = 'load: {
+			match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
+				Ok(Ok(playlist)) => break 'load playlist,
+				Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why),
+				Err(why) => log!(err[path]: "load the contents of [{path}]" => why),
+			};
+			continue 'playback
 		};
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
@@ -222,10 +216,11 @@ fn main() {
 									if index > 0 { index -= 1 };
 									break 'controls
 								},
-								Ok(Signal::TogglePlayback) => if playback.is_paused() {
+								Ok(Signal::TogglePlayback) if playback.is_paused() => {
 									measure = Instant::now();
 									playback.play();
-								} else {
+								},
+								Ok(Signal::TogglePlayback) => {
 									duration -= elapsed;
 									elapsed = Duration::ZERO;
 									playback.pause()
