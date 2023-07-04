@@ -3,7 +3,7 @@ name = "qing"
 edition = "2021"
 version = "0.1.0"
 authors = ["OST-Gh"]
-description = "A music player which's name is a pun on the word queueing."
+description = "A (hopefully) minimalist toml based song shuffler"
 keywords = [""]
 categories = [""]
 
