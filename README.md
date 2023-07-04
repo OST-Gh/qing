@@ -1,6 +1,6 @@
 # qing, a (hopefully) minimalist toml based song shuffler
 
-### Usage: qing [playlist.toml...]
+## Usage: qing [playlist.toml...]
 ```toml
 # qing currently suppports wav and mp3 files
 
@@ -10,7 +10,7 @@
 name = "Foo" # name of the playlist
 
 [[song]]
-name = "Bar" # name of an individual playlist entry
+name = "Bar"              # name of an individual playlist entry
 file = "$PATH/to/bar.mp3" # path to file, supports environment variables and '~'
 
 [[song]]
