@@ -20,7 +20,8 @@ file = "~/baz.wav"
 
 ## Controls:
 - #### qing supports simple playback controls (pausing and skipping)
-> * ' ' or 'k': pause the playback
-> * ',' or 'j': skip one track backwards
-> * '.' or 'l': skip one track forwards
 > * 'c' or 'q': exit the program when in active playback
+> * '/' or 'h': skip one playlist forwards
+> * '.' or 'l': skip one track forwards
+> * ',' or 'j': skip one track backwards
+> * ' ' or 'k': pause the playback
