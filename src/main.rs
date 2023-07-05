@@ -114,10 +114,10 @@ fn main() {
 	let (exit_sender, exit_receiver) = unbounded();
 	let playback_control = spawn(
 		move || loop {
-			match exit_receiver.try_recv() {
+			match exit_receiver.try_recv() { // TODO: minimise possible sources of idle-wake-ups
 				Ok(_) => break,
 				Err(TryRecvError::Empty) => {
-					let event = match event::poll(Duration::ZERO) {
+					let event = match event::poll(Duration::from_millis(250)) {
 						Ok(truth) => if truth { event::read() } else { continue },
 						Err(why) => {
 							log!(err: "poll an event from the current terminal" => why);
