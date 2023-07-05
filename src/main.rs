@@ -4,7 +4,7 @@
 use std::{
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
-	time::Duration,
+	time::{ Duration, Instant },
 	thread::spawn,
 	io::BufReader,
 	env::var,
@@ -214,26 +214,23 @@ fn main() {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 						let mut elapsed = Duration::ZERO;
 						while elapsed <= duration {
-							if !playback.is_paused() { elapsed += FOURTH_SECOND }
-							match receiver.recv_timeout(FOURTH_SECOND) {
+							let now = Instant::now();
+							let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
 								Ok(Signal::ManualExit) => break 'playback,
 								Ok(Signal::SkipPlaylist) => break 'playlist,
 								Ok(Signal::SkipNext) => break,
-								Ok(Signal::SkipBack) => {
-									if index > 0 { index -= 1 };
-									break 'controls
+								Ok(Signal::SkipBack) => break 'controls if index > 0 { index -= 1 },
+								Ok(Signal::TogglePlayback) => {
+									if playback.is_paused() { playback.play() } else { playback.pause() };
+									now.elapsed()
 								},
-								Ok(Signal::TogglePlayback) => if playback.is_paused() {
-									playback.play();
-								} else {
-									playback.pause()
-								},
-								Err(RecvTimeoutError::Timeout) => continue,
+								Err(RecvTimeoutError::Timeout) => FOURTH_SECOND,
 								Err(why) => {
 									log!(err: "receive a signal from the playback control thread" => why);
 									break 'playback
 								},
-							}
+							};
+							if !playback.is_paused() { elapsed += time }
 						}
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
