@@ -1,6 +1,6 @@
-# qing, a (hopefully) minimalist toml based song shuffler
+# quing, a (hopefully) minimalist toml based song shuffler
 
-## Usage: qing [playlist.toml...]
+## Usage: quing [playlist.toml...]
 ```toml
 # playlist.toml
 # NOTE: does not need to be a toml file as long it is the toml format
@@ -17,7 +17,7 @@ file = "~/baz.wav"
 ```
 
 ## Controls:
-- #### qing supports simple playback controls (pausing and skipping)
+- #### quing supports simple playback controls (pausing and skipping)
 ```
 'q' or 'c': exit the program when in active playback
 '/' or 'h': skip one playlist forwards

@@ -1,12 +1,12 @@
 [package]
-name = "qing"
+name = "quing"
 edition = "2021"
 version = "1.0.0"
 authors = ["OST-Gh"]
 description = "A (hopefully) minimalist toml based song shuffler"
 keywords = ["audio", "playback", "toml"]
 categories = ["Command line utilities"]
-repository = "https://github.com/OST-Gh/qing.git"
+repository = "https://github.com/OST-Gh/quing.git"
 license-file = "LICENSE"
 readme = "README.md"
 
