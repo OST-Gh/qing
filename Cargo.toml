@@ -7,7 +7,6 @@ description = "A (hopefully) minimalist toml based song shuffler"
 keywords = ["audio", "playback", "toml"]
 categories = ["Command line utilities"]
 repository = "https://github.com/OST-Gh/qing.git"
-license = "LGPL-2.1"
 license-file = "LICENSE"
 readme = "README.md"
 
