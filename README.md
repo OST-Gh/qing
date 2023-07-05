@@ -26,4 +26,4 @@ file = "~/baz.wav"
 ' ' or 'k': pause the playback
 ```
 
-###### NOTE: skipping is a slightly expensive.
+###### NOTE: skipping is slightly expensive.
