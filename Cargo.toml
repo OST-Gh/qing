@@ -1,11 +1,15 @@
 [package]
 name = "qing"
 edition = "2021"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["OST-Gh"]
 description = "A (hopefully) minimalist toml based song shuffler"
-keywords = [""]
-categories = [""]
+keywords = ["audio", "playback", "toml"]
+categories = ["Command line utilities"]
+repository = "https://github.com/OST-Gh/qing.git"
+license = "LGPL-2.1"
+license-file = "LICENSE"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"], default-features = false }
