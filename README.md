@@ -27,3 +27,8 @@ file = "~/baz.wav"
 ```
 
 ###### NOTE: skipping is slightly expensive.
+
+### Other:
+> The current implementation of the controls is causing a lot of idle-wake-ups on MacOS which i'd like to minimise.
+> Another problem is that whenever this program runs, it sets the current terminal's mode into raw which only gets turned off upon exiting.
+> What i am trying to say is that when the program doesn't exit naturally it'll cause some problems for the current terminal.
