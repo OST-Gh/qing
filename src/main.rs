@@ -102,6 +102,11 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 }
 
 fn main() {
+	let mut files = std::env::args()
+		.skip(1)
+		.peekable();
+	if files.peek() == None { return }
+
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return };
 
 	log!(info: "Spinning up the playback control thread.");
@@ -148,7 +153,7 @@ fn main() {
 	};
 	log!(,,);
 
-	'playback: for path in std::env::args().skip(1) {
+	'playback: for path in files {
 
 		log!(info[path]: "Loading and parsing data from [{path}].");
 		let Songlist { mut song, name } = 'load: {
