@@ -4,7 +4,7 @@
 use std::{
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
-	time::{ Duration, Instant },
+	time::Duration,
 	thread::spawn,
 	io::BufReader,
 	env::var,
@@ -188,7 +188,7 @@ fn main() {
 
 			log!(,);
 			log!(info[name]: "Loading the audio contents and properties of [{name}].");
-			let (contents, mut duration) = 'load: {
+			let (contents, duration) = 'load: {
 				let formatted = fmt_path(file);
 				match (File::open(&formatted), read_from_path(formatted)) {
 					(Ok(contents), Ok(info)) => break 'load (
@@ -212,10 +212,9 @@ fn main() {
 				{
 					Ok(playback) => {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
-						let mut measure = Instant::now();
-						let mut elapsed = measure.elapsed();
+						let mut elapsed = Duration::ZERO;
 						while elapsed <= duration {
-							if !playback.is_paused() { elapsed = measure.elapsed() }
+							if !playback.is_paused() { elapsed += FOURTH_SECOND }
 							match receiver.recv_timeout(FOURTH_SECOND) {
 								Ok(Signal::ManualExit) => break 'playback,
 								Ok(Signal::SkipPlaylist) => break 'playlist,
@@ -225,11 +224,8 @@ fn main() {
 									break 'controls
 								},
 								Ok(Signal::TogglePlayback) => if playback.is_paused() {
-									measure = Instant::now();
 									playback.play();
 								} else {
-									duration -= elapsed;
-									elapsed = Duration::ZERO;
 									playback.pause()
 								},
 								Err(RecvTimeoutError::Timeout) => continue,
