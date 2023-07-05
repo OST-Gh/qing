@@ -23,10 +23,12 @@ use crossterm::{
 		KeyCode,
 	},
 };
-use crossbeam_channel::{ unbounded, TryRecvError };
+use crossbeam_channel::{ unbounded, RecvTimeoutError };
 use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
 use chrono::{ Timelike, Utc };
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const FOURTH_SECOND: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 struct Songlist {
@@ -114,10 +116,10 @@ fn main() {
 	let (exit_sender, exit_receiver) = unbounded();
 	let playback_control = spawn(
 		move || loop {
-			match exit_receiver.try_recv() { // TODO: minimise possible sources of idle-wake-ups
+			match exit_receiver.recv_timeout(FOURTH_SECOND) { // TODO: minimise possible sources of idle-wake-ups
 				Ok(_) => break,
-				Err(TryRecvError::Empty) => {
-					let event = match event::poll(Duration::from_millis(250)) {
+				Err(RecvTimeoutError::Timeout) => {
+					let event = match event::poll(FOURTH_SECOND) {
 						Ok(truth) => if truth { event::read() } else { continue },
 						Err(why) => {
 							log!(err: "poll an event from the current terminal" => why);
@@ -148,6 +150,7 @@ fn main() {
 		Ok(handles) => handles,
 		Err(why) => {
 			log!(err: "determine the default audio output device" => why);
+			if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) };
 			return
 		},
 	};
@@ -213,7 +216,7 @@ fn main() {
 						let mut elapsed = measure.elapsed();
 						while elapsed <= duration {
 							if !playback.is_paused() { elapsed = measure.elapsed() }
-							match receiver.try_recv() {
+							match receiver.recv_timeout(FOURTH_SECOND) {
 								Ok(Signal::ManualExit) => break 'playback,
 								Ok(Signal::SkipPlaylist) => break 'playlist,
 								Ok(Signal::SkipNext) => break,
@@ -229,7 +232,7 @@ fn main() {
 									elapsed = Duration::ZERO;
 									playback.pause()
 								},
-								Err(TryRecvError::Empty) => continue,
+								Err(RecvTimeoutError::Timeout) => continue,
 								Err(why) => {
 									log!(err: "receive a signal from the playback control thread" => why);
 									break 'playback
