@@ -7,7 +7,7 @@ use std::{
 	time::{ Duration, Instant },
 	thread::spawn,
 	io::BufReader,
-	env::var,
+	env::{ var, args },
 };
 use serde::Deserialize;
 use rodio::OutputStream;
@@ -104,10 +104,10 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 }
 
 fn main() {
-	let mut files = std::env::args()
-		.skip(1)
+	let mut files = args()
+		.skip(1) // skips the executable path (e.g.: //usr/local/bin/{bin-name})
 		.peekable();
-	if files.peek() == None { return }
+	if files.peek() == None { println!("Requires at least one playlist.toml file."); return }
 
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return };
 
