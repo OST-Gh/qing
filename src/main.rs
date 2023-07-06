@@ -26,7 +26,6 @@ use crossterm::{
 use crossbeam_channel::{ unbounded, RecvTimeoutError };
 use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
-use chrono::{ Timelike, Utc };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -51,37 +50,23 @@ enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 macro_rules! log {
-	() => {
-		{
-			let now = Utc::now();
-			print!(
-				"\r\x1b[0m[{:0>2}:{:0>2}:{:0>2}]",
-				now.hour(),
-				now.minute(),
-				now.second(),
-			);
-		}
-	};
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
-			log!();
-			print!(concat!(" \x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
 			println!("\0");
 		}
 	};
 	(info$([$($visible: ident)+])?: $message: literal) => {
 		{
-			log!();
-			println!(concat!(" \x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?);
+			println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?);
 		}
 	};
 	($($_: tt)+) => {
 		{
 			$(
 				stringify!($_);
-				log!();
-				println!("\0");
+				println!("\r\0");
 			)+
 		}
 	};
