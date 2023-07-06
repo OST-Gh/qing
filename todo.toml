@@ -15,3 +15,7 @@ group = "global"
 [[todo]]
 name = "Search for bugs"
 group = "global"
+
+[[todo]]
+name = "make a better no-args message with proper formatting and colour"
+group = "global"
