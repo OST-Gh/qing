@@ -19,3 +19,11 @@ group = "global"
 [[todo]]
 name = "make a better no-args message with proper formatting and colour"
 group = "global"
+
+[[todo]]
+name = "update README"
+group = "global"
+
+[[todo]]
+name = "make quer (playlist composer)"
+group = "quer"
