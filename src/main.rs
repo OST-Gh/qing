@@ -219,6 +219,7 @@ fn main() {
 			}
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) };
 		}
+		unsafe { FILES.clear() };
 		log!(info: "\n\n");
 	}
 
