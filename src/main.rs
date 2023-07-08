@@ -130,7 +130,7 @@ fn main() {
 			return
 		},
 	};
-	log!(info: "\n\n");
+	log!(info: "\n");
 
 	'playback: for path in files {
 
@@ -219,7 +219,7 @@ fn main() {
 			}
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) };
 		}
-		log!(info: "\n\n\n");
+		log!(info: "\n\n");
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
