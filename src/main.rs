@@ -60,14 +60,6 @@ macro_rules! log {
 		}
 	};
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
-	($($_: tt)+) => {
-		{
-			$(
-				stringify!($_);
-				println!("\r\0");
-			)+
-		}
-	};
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
@@ -138,7 +130,7 @@ fn main() {
 			return
 		},
 	};
-	log!(,,);
+	log!(info: "\n\n");
 
 	'playback: for path in files {
 
@@ -227,7 +219,7 @@ fn main() {
 			}
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) };
 		}
-		log!(,,,);
+		log!(info: "\n\n\n");
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) };
