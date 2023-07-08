@@ -153,7 +153,7 @@ fn main() {
 		};
 		let length = song.len();
 
-		log!(info[name]: "Shuffling all of the songs in [{name}].");
+		log!(info[name]: "Shuffling all of the songs in [{name}].\n");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
 			for _ in 0..generator.usize(5..20) {
@@ -190,8 +190,7 @@ fn main() {
 		};
 		let mut index = 0;
 
-		log!(info[name]: "Playing back all of the songs in [{name}].");
-		log!(,);
+		log!(info[name]: "\nPlaying back all of the songs in [{name}].");
 		'playlist: while index < length {
 			'controls: {
 				let (name, duration) = unsafe { song.get_unchecked(index) };
