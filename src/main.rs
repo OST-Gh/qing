@@ -6,7 +6,7 @@ use std::{
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
 	thread::spawn,
-	io::BufReader,
+	io::{ BufReader, Seek },
 	env::{ var, args },
 };
 use serde::Deserialize;
@@ -28,6 +28,8 @@ use fastrand::Rng as Generator;
 use lofty::{ read_from_path, AudioFile };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 struct Songlist {
@@ -57,11 +59,7 @@ macro_rules! log {
 			println!("\0");
 		}
 	};
-	(info$([$($visible: ident)+])?: $message: literal) => {
-		{
-			println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?);
-		}
-	};
+	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
 	($($_: tt)+) => {
 		{
 			$(
@@ -95,6 +93,7 @@ fn main() {
 	if files.peek() == None { println!("Requires at least one playlist.toml file."); return }
 
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return };
+	let mut generator = Generator::new();
 
 	log!(info: "Spinning up the playback control thread.");
 	let (sender, receiver) = unbounded();
@@ -152,59 +151,64 @@ fn main() {
 			};
 			continue 'playback
 		};
+		let length = song.len();
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
-		let (length, song) = {
+		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
-			let mut new = Vec::with_capacity(length);
-			let mut generator = Generator::new();
-
-			while !song.is_empty() { new.push(song.swap_remove(generator.usize(0..song.len()))) }
-			(length, new)
+			for _ in 0..generator.usize(5..20) {
+				let old = generator.usize(0..length);
+				let new = generator.usize(0..length);
+				song.swap(old, new);
+			}
+			song
+				.into_iter()
+				.filter_map(|Song { name, file }|
+					{
+						log!(info[name]: "Loading the audio contents and properties of [{name}].");
+						let formatted = fmt_path(file);
+						match (File::open(&formatted), read_from_path(formatted)) {
+							(Ok(contents), Ok(info)) => {
+								unsafe { FILES.push(BufReader::new(contents)) };
+								return Some(
+									(
+										name,
+										info
+											.properties()
+											.duration(),
+									)
+								)
+							},
+							(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
+							(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
+							(Err(file_why), Err(info_why)) => log!(err[name]: "load the audio contents and properties of [{name}]" => file_why info_why),
+						};
+						None
+					}
+				)
+				.collect()
 		};
 		let mut index = 0;
 
 		log!(info[name]: "Playing back all of the songs in [{name}].");
 		log!(,);
 		'playlist: while index < length {
-			let Song { name, file } = song
-				.get(index)
-				.unwrap() /* unwrap safe */;
-
-			log!(,);
-			log!(info[name]: "Loading the audio contents and properties of [{name}].");
-			let (contents, duration) = 'load: {
-				let formatted = fmt_path(file);
-				match (File::open(&formatted), read_from_path(formatted)) {
-					(Ok(contents), Ok(info)) => break 'load (
-						BufReader::new(contents),
-						info
-							.properties()
-							.duration(),
-					),
-					(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
-					(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
-					(Err(file_why), Err(info_why)) => log!(err[name]: "load the audio contents and properties of [{name}]" => file_why info_why),
-				};
-				index += 1;
-				continue 'playlist
-			};
-
 			'controls: {
+				let (name, duration) = unsafe { song.get_unchecked(index) };
 				match handles
 					.1
-					.play_once(contents)
+					.play_once(unsafe { FILES.get_unchecked_mut(index) })
 				{
 					Ok(playback) => {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 						let mut elapsed = Duration::ZERO;
-						while elapsed <= duration {
+						while &elapsed <= duration {
 							let now = Instant::now();
 							let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
 								Ok(Signal::ManualExit) => break 'playback,
 								Ok(Signal::SkipPlaylist) => break 'playlist,
 								Ok(Signal::SkipNext) => break,
-								Ok(Signal::SkipBack) => break 'controls if index > 0 { index -= 1 },
+								Ok(Signal::SkipBack) => break 'controls index -= (index > 0) as usize,
 								Ok(Signal::TogglePlayback) => {
 									if playback.is_paused() { playback.play() } else { playback.pause() };
 									now.elapsed()
@@ -222,6 +226,7 @@ fn main() {
 				}
 				index += 1;
 			}
+			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) };
 		}
 		log!(,,,);
 	}
