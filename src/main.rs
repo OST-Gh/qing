@@ -148,7 +148,7 @@ fn main() {
 			continue 'queue
 		};
 
-		log!(info[name]: "Shuffling all of the songs in [{name}].\n");
+		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
 			for _ in 0..length {
@@ -156,7 +156,7 @@ fn main() {
 				let new = generator.usize(0..length);
 				song.swap(old, new);
 			}
-			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
+			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].\n");
 			song
 				.into_iter()
 				.filter_map(|Song { name, file }|
@@ -186,7 +186,6 @@ fn main() {
 		let length = song.len();
 		let mut index = 0;
 
-		log!(info[name]: "\nPlaying back all of the songs in [{name}].");
 		'playlist: while index < length {
 			'playback: {
 				let (name, duration) = unsafe { song.get_unchecked(index) };
