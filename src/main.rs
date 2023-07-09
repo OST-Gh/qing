@@ -6,9 +6,8 @@ use std::{
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
 	thread::spawn,
-	io::{ BufReader, Seek, IsTerminal, stdout },
+	io::{ BufReader, Seek },
 	env::{ var, args },
-	cell::OnceCell,
 };
 use crossterm::{
 	terminal::{
@@ -28,7 +27,6 @@ use lofty::{ read_from_path, AudioFile };
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static mut FILES: Vec<BufReader<File>> = Vec::new();
-static IS_TER: OnceCell<bool> = OnceCell::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(serde::Deserialize)]
 struct Songlist {
@@ -53,26 +51,12 @@ enum Signal {
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
-			if IS_TER
-				.get()
-				.is_some_and(true)
-			{
-				print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-				$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
-				println!("\x1b[24m\0")
-			} else {
-				print!(concat!("\rAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-				$(print!(" '{}'", $why);)+
-				println!("\0")
-			}
+			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
+			println!("\x1b[24m\0")
 		}
 	};
-	(info$([$($visible: ident)+])?: $message: literal) => {
-		if IS_TER
-			.get()
-			.is_some_and(true)
-		{ println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) } else { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) }
-	};
+	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
@@ -96,8 +80,6 @@ fn main() {
 		.skip(1) // skips the executable path (e.g.: //usr/local/bin/{bin-name})
 		.peekable();
 	if files.peek() == None { println!("Requires at least one playlist.toml file."); return }
-
-	let _ = IS_TER.set(stdout().is_terminal()); // won't (probably) error
 
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return }
 	let mut generator = fastrand::Rng::new();
@@ -242,9 +224,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
 	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	if IS_TER
-		.get()
-		.is_some_and(true)
-	{ log!(info: "\x1b[0m") } else { log!(info: "") }
+	print!("\r\x1b[0m\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
