@@ -145,7 +145,7 @@ fn main() {
 		};
 		let length = song.len();
 
-		log!(info[name]: "Shuffling all of the songs in [{name}].\n");
+		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
 			for _ in 0..length {
@@ -153,11 +153,11 @@ fn main() {
 				let new = generator.usize(0..length);
 				song.swap(old, new);
 			}
+			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
 				.into_iter()
 				.filter_map(|Song { name, file }|
 					{
-						log!(info[name]: "Loading the audio contents and properties of [{name}].");
 						let formatted = fmt_path(file);
 						match (File::open(&formatted), read_from_path(formatted)) {
 							(Ok(contents), Ok(info)) => {
