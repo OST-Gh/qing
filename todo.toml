@@ -27,3 +27,7 @@ group = "global"
 [[todo]]
 name = "make quer (playlist composer)"
 group = "quer"
+
+[[todo]]
+name = "add is_terminal checks in without creating multiple functions nor if checks in the log macro"
+group = "global"
