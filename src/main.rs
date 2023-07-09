@@ -236,6 +236,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
 	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	if IS_TER.get() == Some(&true) { log!(info: "\x1b[0m") } else { log!(info: "") }
+	if IS_TER.get() == Some(&true) { println!("\r\x1b[0m\0") } else { println!("\r\0") }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
