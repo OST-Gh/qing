@@ -52,7 +52,12 @@ macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
 			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
+			$(
+				print!(
+					" '\x1b[1m{}\x1b[22m'",
+					format!("{}", $why).replace('\n', "\n\r")
+				);
+			)+
 			println!("\x1b[24m\0")
 		}
 	};
@@ -142,9 +147,8 @@ fn main() {
 			};
 			continue 'queue
 		};
-		let length = song.len();
 
-		log!(info[name]: "Shuffling all of the songs in [{name}].");
+		log!(info[name]: "Shuffling all of the songs in [{name}].\n");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
 			for _ in 0..length {
@@ -179,6 +183,7 @@ fn main() {
 				)
 				.collect()
 		};
+		let length = song.len();
 		let mut index = 0;
 
 		log!(info[name]: "\nPlaying back all of the songs in [{name}].");
@@ -224,6 +229,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
 	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	log!(info: "\x1b[0m")
+	print!("\r\x1b[0m\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
