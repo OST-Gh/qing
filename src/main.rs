@@ -148,7 +148,7 @@ fn main() {
 		log!(info[name]: "Shuffling all of the songs in [{name}].\n");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
-			for _ in 0..generator.usize(5..20) {
+			for _ in 0..length {
 				let old = generator.usize(0..length);
 				let new = generator.usize(0..length);
 				song.swap(old, new);
