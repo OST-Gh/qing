@@ -7,8 +7,8 @@ description = "A (hopefully) minimalist toml based song shuffler"
 keywords = ["audio", "playback", "toml", "minimal"]
 categories = ["command-line-utilities"]
 repository = "https://github.com/OST-Gh/quing.git"
-license-file = "../LICENSE"
-readme = "../README.md"
+license-file = "LICENSE"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"], default-features = false }
