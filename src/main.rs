@@ -8,7 +8,7 @@ use std::{
 	thread::spawn,
 	io::{ BufReader, Seek, IsTerminal, stdout },
 	env::{ var, args },
-	cell::OnceCell,
+	sync::OnceLock,
 };
 use crossterm::{
 	terminal::{
@@ -28,7 +28,7 @@ use lofty::{ read_from_path, AudioFile };
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static mut FILES: Vec<BufReader<File>> = Vec::new();
-static IS_TER: OnceCell<bool> = OnceCell::new();
+static IS_TER: OnceLock<bool> = OnceLock::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(serde::Deserialize)]
 struct Songlist {
@@ -53,10 +53,7 @@ enum Signal {
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
-			if IS_TER
-				.get()
-				.is_some_and(true)
-			{
+			if IS_TER.get() == Some(&true) {
 				print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 				$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
 				println!("\x1b[24m\0")
@@ -68,10 +65,7 @@ macro_rules! log {
 		}
 	};
 	(info$([$($visible: ident)+])?: $message: literal) => {
-		if IS_TER
-			.get()
-			.is_some_and(true)
-		{ println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) } else { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) }
+		if IS_TER.get() == Some(&true) { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) } else { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) }
 	};
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -242,9 +236,6 @@ fn main() {
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
 	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	if IS_TER
-		.get()
-		.is_some_and(true)
-	{ log!(info: "\x1b[0m") } else { log!(info: "") }
+	if IS_TER.get() == Some(&true) { log!(info: "\x1b[0m") } else { log!(info: "") }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
