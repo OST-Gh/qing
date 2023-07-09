@@ -51,9 +51,9 @@ enum Signal {
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
 		{
-			print!(concat!("\rAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-			$(print!(" '\x1b[1m{}\x1b[0m\x1b[38;2;254;205;33m\x1b[4m'\x1b[0m", $why);)+
-			println!("\0")
+			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			$(print!(" '\x1b[1m{}\x1b[22m'", $why);)+
+			println!("\x1b[24m\0")
 		}
 	};
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
