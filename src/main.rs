@@ -130,11 +130,10 @@ fn main() {
 			return
 		},
 	};
-	log!(info: "\n");
 
 	'queue: for path in files {
 
-		log!(info[path]: "Loading and parsing data from [{path}].");
+		log!(info[path]: "\n\nLoading and parsing data from [{path}].");
 		let Songlist { mut song, name } = 'load: {
 			match fs::read_to_string(&path).map(|contents| toml::from_str(&contents)) {
 				Ok(Ok(playlist)) => break 'load playlist,
@@ -220,7 +219,6 @@ fn main() {
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 		}
 		unsafe { FILES.clear() };
-		log!(info: "\n\n");
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
