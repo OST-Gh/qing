@@ -218,9 +218,9 @@ fn main() {
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
 				}
+				if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 				index += 1;
 			}
-			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 		}
 		unsafe { FILES.clear() };
 	}
