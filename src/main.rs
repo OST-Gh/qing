@@ -156,7 +156,7 @@ fn main() {
 				let new = generator.usize(0..length);
 				song.swap(old, new);
 			}
-			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].\n");
+			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
 				.into_iter()
 				.filter_map(|Song { name, file }|
@@ -183,6 +183,8 @@ fn main() {
 				)
 				.collect()
 		};
+		log!(info: "");
+
 		let length = song.len();
 		let mut index = 0;
 
