@@ -183,33 +183,28 @@ fn main() {
 				)
 				.collect()
 		};
-		log!(info: "");
+		println!("\r\0");
 
 		let length = song.len();
 		let mut index = 0;
 
-		'playlist: while index < length {
-			let (name, duration) = unsafe { song.get_unchecked(index) };
-			let mut elapsed = Duration::ZERO;
+		'playlist: while (index as usize) < length {
+			let old = index; // immutable (sort of) proxy to index (used because of rewind code)
+			let (name, duration) = unsafe { song.get_unchecked(old) };
 			match handles
 				.1
-				.play_once(unsafe { FILES.get_unchecked_mut(index) })
+				.play_once(unsafe { FILES.get_unchecked_mut(old) })
 			{
-				Ok(playback) => {
+				Ok(playback) => 'playback: {
 					log!(info[name]: "Playing back the audio contents of [{name}].");
+					let mut elapsed = Duration::ZERO;
 					while &elapsed <= duration {
 						let now = Instant::now();
 						let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
 							Ok(Signal::ManualExit) => break 'queue,
 							Ok(Signal::SkipPlaylist) => break 'playlist,
-							Ok(Signal::SkipNext) => {
-								index += 1;
-								break
-							},
-							Ok(Signal::SkipBack) => {
-								index -= (index > 0) as usize;
-								break
-							},
+							Ok(Signal::SkipNext) => break,
+							Ok(Signal::SkipBack) => break 'playback index -= (index > 0) as usize,
 							Ok(Signal::TogglePlayback) => {
 								if playback.is_paused() { playback.play() } else { playback.pause() }
 								now.elapsed()
@@ -222,14 +217,16 @@ fn main() {
 						};
 						if !playback.is_paused() { elapsed += time }
 					}
+					index += 1;
 				},
-				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
-			}
-			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
-			if &elapsed > duration { index += 1 };
-			
+				Err(why) => {
+					log!(err[name]: "playback [{name}] from the default audio output device" => why);
+					break 'playlist
+				},
+			};
+			if let Err(why) = unsafe { FILES.get_unchecked_mut(old) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 		}
-		unsafe { FILES.clear() };
+		unsafe { FILES.clear() }
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }

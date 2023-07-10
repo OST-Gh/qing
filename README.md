@@ -26,7 +26,8 @@ file = "~/baz.wav"
 ' ' or 'k': pause the playback
 ```
 
-###### NOTE: skipping is slightly expensive.
+###### NOTE-1: skipping is slightly expensive.
+###### NOTE-2: all files are loaded upon startup, meaning that there's a (os set) hard cap on playlist length.
 
 ### Other:
 > The current implementation of the controls is causing a lot of idle-wake-ups on MacOS which i'd like to minimise.
