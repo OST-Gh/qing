@@ -189,40 +189,44 @@ fn main() {
 		let mut index = 0;
 
 		'playlist: while index < length {
-			'playback: {
-				let (name, duration) = unsafe { song.get_unchecked(index) };
-				match handles
-					.1
-					.play_once(unsafe { FILES.get_unchecked_mut(index) })
-				{
-					Ok(playback) => {
-						log!(info[name]: "Playing back the audio contents of [{name}].");
-						let mut elapsed = Duration::ZERO;
-						while &elapsed <= duration {
-							let now = Instant::now();
-							let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
-								Ok(Signal::ManualExit) => break 'queue,
-								Ok(Signal::SkipPlaylist) => break 'playlist,
-								Ok(Signal::SkipNext) => break,
-								Ok(Signal::SkipBack) => break 'playback index -= (index > 0) as usize,
-								Ok(Signal::TogglePlayback) => {
-									if playback.is_paused() { playback.play() } else { playback.pause() }
-									now.elapsed()
-								},
-								Err(RecvTimeoutError::Timeout) => FOURTH_SECOND,
-								Err(why) => {
-									log!(err: "receive a signal from the playback control thread" => why);
-									break 'queue
-								},
-							};
-							if !playback.is_paused() { elapsed += time }
-						}
-					},
-					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
-				}
-				if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
-				index += 1;
+			let (name, duration) = unsafe { song.get_unchecked(index) };
+			match handles
+				.1
+				.play_once(unsafe { FILES.get_unchecked_mut(index) })
+			{
+				Ok(playback) => {
+					log!(info[name]: "Playing back the audio contents of [{name}].");
+					let mut elapsed = Duration::ZERO;
+					while &elapsed <= duration {
+						let now = Instant::now();
+						let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
+							Ok(Signal::ManualExit) => break 'queue,
+							Ok(Signal::SkipPlaylist) => break 'playlist,
+							Ok(Signal::SkipNext) => {
+								index += 1;
+								break
+							},
+							Ok(Signal::SkipBack) => {
+								index -= (index > 0) as usize;
+								break
+							},
+							Ok(Signal::TogglePlayback) => {
+								if playback.is_paused() { playback.play() } else { playback.pause() }
+								now.elapsed()
+							},
+							Err(RecvTimeoutError::Timeout) => FOURTH_SECOND,
+							Err(why) => {
+								log!(err: "receive a signal from the playback control thread" => why);
+								break 'queue
+							},
+						};
+						if !playback.is_paused() { elapsed += time }
+					}
+				},
+				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
 			}
+			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
+			
 		}
 		unsafe { FILES.clear() };
 	}
