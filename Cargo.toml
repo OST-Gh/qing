@@ -16,7 +16,6 @@ toml = { version = "0.7", features = ["parse"], default-features = false }
 crossterm = { version = "0.26", default-features = false }
 rodio = "0.17"
 lofty = "0.14"
-crossbeam-channel = "0.5"
 fastrand = "2"
 
 [profile.release]
