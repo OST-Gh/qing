@@ -89,43 +89,6 @@ fn main() {
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return }
 	let mut generator = fastrand::Rng::new();
 
-	log!(info: "Spinning up the playback control thread.");
-	let (sender, receiver) = unbounded();
-	let (exit_sender, exit_receiver) = unbounded();
-	let playback_control = spawn(
-		move || 'input: loop {
-			match exit_receiver.recv_timeout(FOURTH_SECOND) { // TODO: minimise possible sources of idle-wake-ups
-				Ok(_) => break,
-				Err(RecvTimeoutError::Timeout) => {
-					let event = 'read: {
-						match event::poll(FOURTH_SECOND) {
-							Ok(truth) => if truth { break 'read event::read() },
-							Err(why) => log!(err: "poll an event from the current terminal" => why),
-						};
-						continue 'input
-					};
-					let signal = 'signal: {
-						match event {
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char(key), .. })) => break 'signal match key {
-								'q' | 'c' => Signal::ManualExit,
-								'/' | 'h' => Signal::SkipPlaylist,
-								'.' | 'l' => Signal::SkipNext,
-								',' | 'j' => Signal::SkipBack,
-								' ' | 'k' => Signal::TogglePlayback,
-								_ => continue 'input,
-							},
-							Err(why) => log!(err: "read an event from the current terminal" => why),
-							_ => { },
-						}
-						continue 'input
-					};
-					if let Err(why) = sender.send(signal) { log!(err: "send a signal to the playback" => why) }
-				},
-				Err(why) => log!(err: "receive a signal from the main thread" => why),
-			};
-		}
-	);
-
 	log!(info: "Determining the output device.");
 	let handles = match rodio::OutputStream::try_default() {
 		Ok(handles) => handles,
@@ -198,24 +161,31 @@ fn main() {
 				Ok(playback) => 'playback: {
 					log!(info[name]: "Playing back the audio contents of [{name}].");
 					let mut elapsed = Duration::ZERO;
-					while &elapsed <= duration {
+					'play: while &elapsed <= duration {
 						let now = Instant::now();
-						let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
-							Ok(Signal::ManualExit) => break 'queue,
-							Ok(Signal::SkipPlaylist) => break 'playlist,
-							Ok(Signal::SkipNext) => break,
-							Ok(Signal::SkipBack) => break 'playback index -= (index > 0) as usize,
-							Ok(Signal::TogglePlayback) => {
-								if playback.is_paused() { playback.play() } else { playback.pause() }
-								now.elapsed()
-							},
-							Err(RecvTimeoutError::Timeout) => FOURTH_SECOND,
-							Err(why) => {
-								log!(err: "receive a signal from the playback control thread" => why);
-								break 'queue
-							},
-						};
-						if !playback.is_paused() { elapsed += time }
+						'time: {
+							break 'time match 'read: {
+								break 'time match event::poll(FOURTH_SECOND) {
+									Ok(truth) => if truth { break 'read event::read() },
+									Err(why) => log!(err: "poll an event from the current terminal" => why),
+								}
+							} {
+								Ok(Event::Key(KeyEvent { code: KeyCode::Char(key), .. })) => match key.to_ascii_lowercase() {
+									'c' => break 'queue,
+									'n' => break 'playlist,
+									'l' => break 'play,
+									'j' => break 'playback index -= (old > 0) as usize,
+									'k' => if playback.is_paused() { playback.play() } else { playback.pause() },
+									_ => { },
+								},
+								Err(why) => {
+									log!(err: "read an event from the current terminal" => why);
+									break 'queue
+								},
+								_ => { },
+							}
+						}
+						if !playback.is_paused() { elapsed += now.elapsed() }
 					}
 					index += 1;
 				},
@@ -229,8 +199,6 @@ fn main() {
 		unsafe { FILES.clear() }
 	}
 
-	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
-	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
 }

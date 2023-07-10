@@ -19,11 +19,12 @@ file = "~/baz.wav"
 ## Controls:
 - #### quing supports simple playback controls (pausing and skipping)
 ```
-'q' or 'c': exit the program when in active playback
-'/' or 'h': skip one playlist forwards
-'.' or 'l': skip one track forwards
-',' or 'j': skip one track backwards
-' ' or 'k': pause the playback
+'c': exit the program when in active playback
+'n': skip one playlist forwards
+'l': skip one track forwards
+'j': skip one track backwards
+'m': mute or unmute the playback
+'k': pause or start the playback
 ```
 
 ###### NOTE-1: skipping is slightly expensive.
