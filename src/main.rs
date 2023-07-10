@@ -190,13 +190,13 @@ fn main() {
 
 		'playlist: while index < length {
 			let (name, duration) = unsafe { song.get_unchecked(index) };
+			let mut elapsed = Duration::ZERO;
 			match handles
 				.1
 				.play_once(unsafe { FILES.get_unchecked_mut(index) })
 			{
 				Ok(playback) => {
 					log!(info[name]: "Playing back the audio contents of [{name}].");
-					let mut elapsed = Duration::ZERO;
 					while &elapsed <= duration {
 						let now = Instant::now();
 						let time = match receiver.recv_deadline(now + FOURTH_SECOND) {
@@ -226,6 +226,7 @@ fn main() {
 				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why),
 			}
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
+			if &elapsed > duration { index += 1 };
 			
 		}
 		unsafe { FILES.clear() };
