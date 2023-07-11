@@ -2,6 +2,7 @@
 //! NOTE: crt in raw mode behaves strangely or maps <100% keyboard maps to 100% maps, e.g.: backspace in raw-mode = h
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
+	thread::spawn,
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
@@ -21,6 +22,7 @@ use crossterm::{
 	},
 };
 use lofty::{ read_from_path, AudioFile };
+use crossbeam_channel::{ unbounded, RecvTimeoutError };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -36,6 +38,14 @@ struct Songlist {
 struct Song {
 	name: Box<str>,
 	file: Box<str>,
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+enum Signal {
+	ManualExit, // signal sent by pb_ctl to main for indication of the user manually exiting
+	SkipPlaylist,
+	SkipNext,
+	SkipBack,
+	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 macro_rules! log {
@@ -89,6 +99,45 @@ fn main() {
 		},
 	};
 
+	log!(info: "Spinning up the playback control thread.");
+	let (sender, receiver) = unbounded();
+	let (exit_sender, exit_receiver) = unbounded();
+	let playback_control = spawn(
+		move || loop {
+			match exit_receiver.recv_timeout(FOURTH_SECOND) { // TODO: minimise possible sources of idle-wake-ups
+				Ok(_) => break,
+				Err(RecvTimeoutError::Timeout) => {
+					let signal = match match event::poll(FOURTH_SECOND) {
+						Ok(truth) => if truth { event::read() } else { continue },
+						Err(why) => {
+							log!(err: "poll an event from the current terminal" => why);
+							break
+						},
+					} {
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('c'), .. })) => Signal::ManualExit,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('n'), .. })) => Signal::SkipPlaylist,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('l'), .. })) => Signal::SkipNext,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('j'), .. })) => Signal::SkipBack,
+						Ok(Event::Key(KeyEvent { code: KeyCode::Char('k'), .. })) => Signal::TogglePlayback,
+						Err(why) => {
+							log!(err: "read an event from the current terminal" => why);
+							break
+						},
+						_ => continue,
+					};
+					if let Err(why) = sender.send(signal) {
+						log!(err: "send a signal to the playback" => why);
+						break
+					}
+				},
+				Err(why) => {
+					log!(err: "receive a signal from the main thread" => why);
+					break
+				},
+			};
+		}
+	);
+
 	'queue: for path in files {
 
 		log!(info[path]: "\n\nLoading and parsing data from [{path}].");
@@ -105,9 +154,11 @@ fn main() {
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
 			for _ in 0..length {
-				let old = generator.usize(0..length);
-				let new = generator.usize(0..length);
-				song.swap(old, new);
+				loop {
+					let old = generator.usize(0..length);
+					let new = generator.usize(0..length);
+					if old != new { break song.swap(old, new) }
+				}
 			}
 			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
@@ -151,37 +202,27 @@ fn main() {
 				Ok(playback) => 'playback: {
 					log!(info[name]: "Playing back the audio contents of [{name}].");
 					let mut elapsed = Duration::ZERO;
-					'play: while &elapsed <= duration {
+					while &elapsed <= duration {
 						let now = Instant::now();
-						'time: {
-							break 'time match 'read: {
-								break 'time match event::poll(FOURTH_SECOND) {
-									Ok(truth) => if truth { break 'read event::read() },
-									Err(why) => log!(err: "poll an event from the current terminal" => why),
-								}
-							} {
-								Ok(Event::Key(KeyEvent { code: KeyCode::Char(key), .. })) => match key.to_ascii_lowercase() {
-									'c' => break 'queue,
-									'n' => break 'playlist,
-									'l' => break 'play,
-									'j' => break 'playback index -= (old > 0) as usize,
-									'k' => if playback.is_paused() { playback.play() } else { playback.pause() },
-									_ => { },
-								},
-								Err(why) => {
-									log!(err: "read an event from the current terminal" => why);
-									break 'queue
-								},
-								_ => { },
-							}
+						match receiver.recv_deadline(now + FOURTH_SECOND) {
+							Ok(Signal::ManualExit) => break 'queue,
+							Ok(Signal::SkipPlaylist) => break 'playlist,
+							Ok(Signal::SkipNext) => break,
+							Ok(Signal::SkipBack) => break 'playback index -= (old > 0) as usize,
+							Ok(Signal::TogglePlayback) => if playback.is_paused() { playback.play() } else { playback.pause() },
+							Err(RecvTimeoutError::Timeout) => { },
+							Err(why) => {
+								log!(err: "receive a signal from the playback control thread" => why);
+								break 'queue
+							},
 						}
 						if !playback.is_paused() { elapsed += now.elapsed() }
 					}
-					index += 1;
+					index += 1
 				},
 				Err(why) => {
 					log!(err[name]: "playback [{name}] from the default audio output device" => why);
-					break 'playlist
+					break 'queue
 				},
 			};
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(old) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
@@ -189,6 +230,8 @@ fn main() {
 		unsafe { FILES.clear() }
 	}
 
+	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
+	let _ = playback_control.join(); // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
 }
