@@ -153,12 +153,11 @@ fn main() {
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
-			for _ in 0..length {
-				loop {
-					let old = generator.usize(0..length);
-					let new = generator.usize(0..length);
-					if old != new { break song.swap(old, new) }
-				}
+			for _ in 0..length * length {
+				let old = generator.usize(0..length);
+				let new = generator.usize(0..length);
+				if old == new { continue }
+				song.swap(old, new)
 			}
 			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
