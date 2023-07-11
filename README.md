@@ -23,7 +23,6 @@ file = "~/baz.wav"
 'n': skip one playlist forwards
 'l': skip one track forwards
 'j': skip one track backwards
-'m': mute or unmute the playback
 'k': pause or start the playback
 ```
 
