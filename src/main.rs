@@ -1,6 +1,4 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//! NOTE: crt in raw mode behaves strangely or maps <100% keyboard maps to 100% maps, e.g.: backspace in raw-mode = h
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	thread::spawn,
 	fs::{ self, File },
@@ -49,7 +47,7 @@ enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 macro_rules! log {
-	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+) => {
+	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
 			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(
@@ -58,7 +56,8 @@ macro_rules! log {
 					format!("{}", $why).replace('\n', "\n\r")
 				);
 			)+
-			println!("\x1b[24m\0")
+			println!("\x1b[24m\0");
+			$($($retaliation)+)?
 		}
 	};
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
@@ -69,10 +68,10 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 		.as_ref()
 		.split(MAIN_SEPARATOR_STR)
 		.filter_map(|part|
-			{
-				if part == "~" { return var("HOME").ok() };
-				if part.starts_with('$') { return var(&part[1..]).ok() };
-				Some(String::from(part))
+			match part {
+				"~" => var("HOME").ok(),
+				_ if part.starts_with('$') => var(&part[1..]).ok(),
+				_ => Some(String::from(part)),
 			}
 		)
 		.collect::<Vec<String>>()
@@ -84,9 +83,12 @@ fn main() {
 	let mut files = args()
 		.skip(1) // skips the executable path (e.g.: //usr/local/bin/{bin-name})
 		.peekable();
-	if files.peek() == None { println!("Requires at least one playlist.toml file."); return }
+	if files
+		.peek()
+		.is_none()
+	{ println!("Requires at least one playlist.toml file."); return }
 
-	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why); return }
+	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return) }
 	let mut generator = fastrand::Rng::new();
 
 	log!(info: "Determining the output device.");
@@ -109,31 +111,19 @@ fn main() {
 				Err(RecvTimeoutError::Timeout) => {
 					let signal = match match event::poll(FOURTH_SECOND) {
 						Ok(truth) => if truth { event::read() } else { continue },
-						Err(why) => {
-							log!(err: "poll an event from the current terminal" => why);
-							break
-						},
+						Err(why) => log!(err: "poll an event from the current terminal" => why; break),
 					} {
 						Ok(Event::Key(KeyEvent { code: KeyCode::Char('c'), .. })) => Signal::ManualExit,
 						Ok(Event::Key(KeyEvent { code: KeyCode::Char('n'), .. })) => Signal::SkipPlaylist,
 						Ok(Event::Key(KeyEvent { code: KeyCode::Char('l'), .. })) => Signal::SkipNext,
 						Ok(Event::Key(KeyEvent { code: KeyCode::Char('j'), .. })) => Signal::SkipBack,
 						Ok(Event::Key(KeyEvent { code: KeyCode::Char('k'), .. })) => Signal::TogglePlayback,
-						Err(why) => {
-							log!(err: "read an event from the current terminal" => why);
-							break
-						},
+						Err(why) => log!(err: "read an event from the current terminal" => why; break),
 						_ => continue,
 					};
-					if let Err(why) = sender.send(signal) {
-						log!(err: "send a signal to the playback" => why);
-						break
-					}
+					if let Err(why) = sender.send(signal) { log!(err: "send a signal to the playback" => why; break) }
 				},
-				Err(why) => {
-					log!(err: "receive a signal from the main thread" => why);
-					break
-				},
+				Err(why) => log!(err: "receive a signal from the main thread" => why; break),
 			};
 		}
 	);
@@ -141,22 +131,18 @@ fn main() {
 	'queue: for path in files {
 
 		log!(info[path]: "\n\nLoading and parsing data from [{path}].");
-		let Songlist { mut song, name } = 'load: {
-			match fs::read_to_string(&path).map(|contents| toml::from_str(&contents)) {
-				Ok(Ok(playlist)) => break 'load playlist,
-				Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why),
-				Err(why) => log!(err[path]: "load the contents of [{path}]" => why),
-			};
-			continue 'queue
+		let Songlist { mut song, name } = match fs::read_to_string(&path).map(|contents| toml::from_str(&contents)) {
+			Ok(Ok(playlist)) => playlist,
+			Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; continue 'queue),
+			Err(why) => log!(err[path]: "load the contents of [{path}]" => why; continue 'queue),
 		};
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let song: Vec<(Box<str>, Duration)> = {
 			let length = song.len();
-			for _ in 0..length * length {
+			for _ in 0..length {
 				let old = generator.usize(0..length);
 				let new = generator.usize(0..length);
-				if old == new { continue }
 				song.swap(old, new)
 			}
 			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
@@ -210,19 +196,12 @@ fn main() {
 							Ok(Signal::SkipBack) => break 'playback index -= (old > 0) as usize,
 							Ok(Signal::TogglePlayback) => if playback.is_paused() { playback.play() } else { playback.pause() },
 							Err(RecvTimeoutError::Timeout) => { },
-							Err(why) => {
-								log!(err: "receive a signal from the playback control thread" => why);
-								break 'queue
-							},
-						}
+							Err(why) => log!(err: "receive a signal from the playback control thread" => why; break 'queue), 			}
 						if !playback.is_paused() { elapsed += now.elapsed() }
 					}
 					index += 1
 				},
-				Err(why) => {
-					log!(err[name]: "playback [{name}] from the default audio output device" => why);
-					break 'queue
-				},
+				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue),
 			};
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(old) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 		}
@@ -230,7 +209,7 @@ fn main() {
 	}
 
 	if let Err(why) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => why) }
-	let _ = playback_control.join(); // won't (probably) error.
+	if let Err(_) = playback_control.join() { let nothing = "NOT_PRINTABLE"; log!(err: "clean up the playback control thread" => nothing) }; // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
 }
