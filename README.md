@@ -33,3 +33,6 @@ file = "~/baz.wav"
 > The current implementation of the controls is causing a lot of idle-wake-ups on MacOS which i'd like to minimise.
 > Another problem is that whenever this program runs, it sets the current terminal's mode into raw which only gets turned off upon exiting.
 > What i am trying to say is that when the program doesn't exit naturally it'll cause some problems for the current terminal.
+>
+> Another thing i've recently noticed that it is impacting the cpu quite the bit and i'd also like to minimize that.
+> If anyone knows how to do so, please do open an issua or a pull-request on quing's github.
