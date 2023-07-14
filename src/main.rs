@@ -192,17 +192,20 @@ fn main() {
 					while &elapsed <= duration {
 						let now = Instant::now();
 						let paused = playback.is_paused();
-						match receiver.recv_deadline(now + FOURTH_SECOND) {
+						elapsed += match receiver.recv_deadline(now + FOURTH_SECOND) {
+							Err(RecvTimeoutError::Timeout) => if paused { continue } else { FOURTH_SECOND },
+
 							Ok(Signal::ManualExit) => break 'queue,
 							Ok(Signal::SkipPlaylist) => break 'playlist,
 							Ok(Signal::SkipNext) => break,
 							Ok(Signal::SkipBack) => break 'playback index -= (old > 0 && elapsed <= SECOND) as usize,
-							Ok(Signal::TogglePlayback) => if paused { playback.play() } else { playback.pause() },
+							Ok(Signal::TogglePlayback) => {
+								if paused { playback.play() } else { playback.pause() }
+								now.elapsed()
+							},
 
-							Err(RecvTimeoutError::Timeout) => { },
 							Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
-						}
-						if !paused { elapsed += now.elapsed() }
+						};
 					}
 					index += 1
 				},
