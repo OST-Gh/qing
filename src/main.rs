@@ -6,6 +6,9 @@ use std::{
 	time::{ Duration, Instant },
 	io::{ BufReader, Seek },
 	env::{ var, args },
+	cell::OnceCell,
+	panic,
+	any::Any, sync::Arc,
 };
 use crossterm::{
 	terminal::{ enable_raw_mode, disable_raw_mode },
@@ -18,6 +21,7 @@ use crossterm::{
 };
 use lofty::{ read_from_path, AudioFile };
 use crossbeam_channel::{ unbounded, RecvTimeoutError };
+use rodio::{ OutputStream, OutputStreamHandle };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 const SECOND: Duration = Duration::from_secs(1);
@@ -50,12 +54,9 @@ macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
 			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-			$(
-				print!(
-					" '\x1b[1m{}\x1b[22m'",
-					format!("{}", $why).replace('\n', "\n\r")
-				);
-			)+
+			print!(" '\x1b[1m");
+			$(print!("\n\r{}", $why);)+
+			print!("\x1b[22m'");
 			println!("\x1b[24m\0");
 			$($($retaliation)+)?
 		}
@@ -85,30 +86,60 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err: "canonicalise a path" => why; PathBuf::new()))
 }
 
+fn panic_payload(payload: &(dyn Any + Send)) -> String {
+	(&payload)
+		.downcast_ref::<&str>()
+		.map(|slice| String::from(*slice))
+		.xor(
+			payload
+				.downcast_ref::<String>()
+				.map(String::from)
+		)
+		.unwrap()
+}
+
+fn panic_handle(info: &panic::PanicInfo) {
+	let panic = panic_payload(info.payload());
+	unsafe {
+		let panic = panic
+			.splitn(2, "  ")
+			.collect::<Vec<&str>>();
+		let message = panic.get_unchecked(0);
+		let reason = panic
+			.get(1)
+			.unwrap_or(&"NO_DISPLAYABLE_INFO")
+			.replace('\n', "\r\n");
+		println!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0")
+	};
+}
+
+fn init_output() -> (OutputStream, OutputStreamHandle) {
+	log!(info: "Determining the output device.");
+	match rodio::OutputStream::try_default() {
+		Ok(handles) => handles,
+		Err(why) => {
+			log!(err: "determine the default audio output device" => why);
+			if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+			panic!()
+		},
+	}
+}
+
 fn main() {
+	panic::set_hook(Box::new(panic_handle));
+
 	let mut files = args()
 		.skip(1) // skips the executable path (e.g.: //usr/local/bin/{bin-name})
 		.peekable();
 	if files
 		.peek()
-		.is_none()
-	{
-		println!("Requires at least one playlist.toml file.");
-		return
-	}
+		.is_none() // can't run without one playlist
+	{ panic!("get the program arguments  no arguments given") }
 
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return) }
+	let handles = OnceCell::new(); // expensive operation only executed if no err.
 	let mut generator = fastrand::Rng::new();
 
-	log!(info: "Determining the output device.");
-	let handles = match rodio::OutputStream::try_default() {
-		Ok(handles) => handles,
-		Err(why) => {
-			log!(err: "determine the default audio output device" => why);
-			if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-			return
-		},
-	};
 
 	log!(info: "Spinning up the playback control thread.");
 	let (sender, receiver) = unbounded();
@@ -117,7 +148,7 @@ fn main() {
 		while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
 			let signal = match match event::poll(FOURTH_SECOND) {
 				Ok(truth) => if truth { event::read() } else { continue },
-				Err(why) => log!(err: "poll an event from the current terminal" => why; break),
+				Err(why) => panic!("poll an event from the current terminal  {why}"),
 			} {
 				Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
 					if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
@@ -127,10 +158,10 @@ fn main() {
 				Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
 				Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
 				Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
-				Err(why) => log!(err: "read an event from the current terminal" => why; break),
+				Err(why) => panic!("read an event from the current terminal  {why}"),
 				_ => continue,
 			};
-			if let Err(_) = sender.send(signal) { log!(err: "send a signal to the playback" => NO_DISPLAY; break) }
+			if let Err(_) = sender.send(signal) { panic!("send a signal to the playback") }
 		}
 	);
 
@@ -175,11 +206,14 @@ fn main() {
 		};
 		println!("\r\0");
 
+		let handles = handles.get_or_init(init_output);
+
+
 		let length = song.len();
 		let mut index = 0;
 
-		'playlist: while index < length {
-			let old = index; // immutable (sort of) proxy to index (used because of rewind code)
+		'playlist: while index < length && !playback_control.is_finished() {
+			let old = index; // (sort of) proxy to index (used because of rewind code)
 			// unless something is very wrong with the index (old), this will not error.
 			let (name, duration) = unsafe { song.get_unchecked(old) };
 			match handles
@@ -219,7 +253,10 @@ fn main() {
 	if !playback_control.is_finished() {
 		if let Err(_) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => NO_DISPLAY) }
 	} // assume ok if not thread prob dead (finished)
-	if let Err(_) = playback_control.join() { log!(err: "clean up the playback control thread" => NO_DISPLAY) }; // won't (probably) error.
+	if let Err(why) = playback_control.join() {
+		let why = panic_payload(&why);
+		log!(err: "clean up the playback control thread" => why)
+	}; // won't (probably) error.
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
 }
