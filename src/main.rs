@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
-	thread::spawn,
+	thread::{ spawn, JoinHandle },
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
@@ -8,7 +8,7 @@ use std::{
 	env::{ var, args },
 	cell::OnceCell,
 	panic,
-	any::Any, sync::Arc,
+	any::Any,
 };
 use crossterm::{
 	terminal::{ enable_raw_mode, disable_raw_mode },
@@ -20,7 +20,7 @@ use crossterm::{
 	},
 };
 use lofty::{ read_from_path, AudioFile };
-use crossbeam_channel::{ unbounded, RecvTimeoutError };
+use crossbeam_channel::{ unbounded, RecvTimeoutError, Sender, Receiver };
 use rodio::{ OutputStream, OutputStreamHandle };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
@@ -40,6 +40,13 @@ struct Songlist {
 struct Song {
 	name: Box<str>,
 	file: Box<str>,
+}
+
+struct Initialisable {
+	output: (OutputStream, OutputStreamHandle),
+	control: JoinHandle<()>,
+	exit: Sender<u8>,
+	signal: Receiver<Signal>,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 enum Signal {
@@ -113,18 +120,6 @@ fn panic_handle(info: &panic::PanicInfo) {
 	};
 }
 
-fn init_output() -> (OutputStream, OutputStreamHandle) {
-	log!(info: "Determining the output device.");
-	match rodio::OutputStream::try_default() {
-		Ok(handles) => handles,
-		Err(why) => {
-			log!(err: "determine the default audio output device" => why);
-			if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-			panic!()
-		},
-	}
-}
-
 fn main() {
 	panic::set_hook(Box::new(panic_handle));
 
@@ -137,37 +132,13 @@ fn main() {
 	{ panic!("get the program arguments  no arguments given") }
 
 	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return) }
-	let handles = OnceCell::new(); // expensive operation only executed if no err.
+
 	let mut generator = fastrand::Rng::new();
-
-
-	log!(info: "Spinning up the playback control thread.");
-	let (sender, receiver) = unbounded();
-	let (exit_sender, exit_receiver) = unbounded();
-	let playback_control = spawn(move ||
-		while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
-			let signal = match match event::poll(FOURTH_SECOND) {
-				Ok(truth) => if truth { event::read() } else { continue },
-				Err(why) => panic!("poll an event from the current terminal  {why}"),
-			} {
-				Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
-					if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
-					break
-				},
-				Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipPlaylist,
-				Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
-				Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
-				Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
-				Err(why) => panic!("read an event from the current terminal  {why}"),
-				_ => continue,
-			};
-			if let Err(_) = sender.send(signal) { panic!("send a signal to the playback") }
-		}
-	);
+	let init = OnceCell::new(); // expensive operation only executed if no err.
 
 	'queue: for path in files {
 
-		log!(info[path]: "\n\nLoading and parsing data from [{path}].");
+		log!(info[path]: "Loading and parsing data from [{path}].");
 		let Songlist { mut song, name } = match fs::read_to_string(&path).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; continue 'queue),
@@ -178,7 +149,7 @@ fn main() {
 
 			log!(info[name]: "Shuffling all of the songs in [{name}].");
 			let length = song.len();
-			for _ in 0..length {
+			for _ in 0..length * length { // l^2 for more shuffling and less chance for order
 				let old = generator.usize(0..length);
 				let new = generator.usize(0..length);
 				song.swap(old, new)
@@ -206,17 +177,18 @@ fn main() {
 		};
 		println!("\r\0");
 
-		let handles = handles.get_or_init(init_output);
+		let init = init.get_or_init(Initialisable::new);
 
 
 		let length = song.len();
 		let mut index = 0;
 
-		'playlist: while index < length && !playback_control.is_finished() {
+		'playlist: while index < length && !init.control.is_finished() {
 			let old = index; // (sort of) proxy to index (used because of rewind code)
 			// unless something is very wrong with the index (old), this will not error.
 			let (name, duration) = unsafe { song.get_unchecked(old) };
-			match handles
+			match init
+				.output
 				.1
 				.play_once(unsafe { FILES.get_unchecked_mut(old) })
 			{
@@ -226,7 +198,7 @@ fn main() {
 					while &elapsed <= duration {
 						let now = Instant::now();
 						let paused = playback.is_paused();
-						elapsed += match receiver.recv_deadline(now + FOURTH_SECOND) {
+						elapsed += match init.signal.recv_deadline(now + FOURTH_SECOND) {
 							Err(RecvTimeoutError::Timeout) => if paused { continue } else { FOURTH_SECOND },
 
 							Ok(Signal::ManualExit) => break 'queue,
@@ -250,14 +222,67 @@ fn main() {
 		unsafe { FILES.clear() }
 	}
 
-	if !playback_control.is_finished() {
-		if let Err(_) = exit_sender.send(0) { log!(err: "send the exit signal to the playback control thread" => NO_DISPLAY) }
-	} // assume ok if not thread prob dead (finished)
-	if let Err(why) = playback_control.join() {
-		let why = panic_payload(&why);
-		log!(err: "clean up the playback control thread" => why)
-	}; // won't (probably) error.
+	init
+		.into_inner()
+		.map(Initialisable::exit);
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+impl Initialisable {
+	fn new() -> Self {
+		log!(info: "Determining the output device.");
+		let output = match rodio::OutputStream::try_default() {
+			Ok(handles) => handles,
+			Err(why) => {
+				if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+				panic!("determine the default audio output device  {why}")
+			},
+		};
+
+
+		log!(info: "Spinning up the playback control thread.");
+		let (sender, signal) = unbounded();
+		let (exit, exit_receiver) = unbounded();
+		let control = spawn(move ||
+			while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
+				let signal = match match event::poll(FOURTH_SECOND) {
+					Ok(truth) => if truth { event::read() } else { continue },
+					Err(why) => panic!("poll an event from the current terminal  {why}"),
+				} {
+					Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
+						if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
+						break
+					},
+					Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipPlaylist,
+					Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
+					Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
+					Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
+					Err(why) => panic!("read an event from the current terminal  {why}"),
+					_ => continue,
+				};
+				if let Err(_) = sender.send(signal) { panic!("send a signal to the playback") }
+			}
+		);
+
+		Self {
+			output,
+			control,
+			exit,
+			signal,
+		}
+	}
+
+	fn exit(self) {
+		let Self { control, exit, .. } = self;
+
+		if !control.is_finished() {
+			if let Err(_) = exit.send(0) { log!(err: "send the exit signal to the playback control thread" => NO_DISPLAY) }
+		} // assume ok if not thread prob dead (finished)
+		if let Err(why) = control.join() {
+			let why = panic_payload(&why);
+			log!(err: "clean up the playback control thread" => why)
+		} // won't (probably) error.
+	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

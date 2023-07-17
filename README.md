@@ -18,7 +18,7 @@ file = "~/baz.wav"
 
 ## Controls:
 - #### quing supports simple playback controls (pausing and skipping)
-```
+```txt
 'c': exit the program when in active playback
 'n': skip one playlist forwards
 'l': skip one track forwards
@@ -26,8 +26,7 @@ file = "~/baz.wav"
 'k': pause or start the playback
 ```
 
-###### NOTE-1: skipping is slightly expensive.
-###### NOTE-2: all files are loaded upon startup, meaning that there's a (os set) hard cap on playlist length.
+###### NOTE: all files are loaded upon startup, meaning that there's a (os set) hard cap on playlist length.
 
 ### Other:
 > The current implementation of the controls is causing a lot of idle-wake-ups on MacOS which i'd like to minimise.
