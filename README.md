@@ -18,12 +18,12 @@ file = "~/baz.wav"
 
 ## Controls:
 - #### quing supports simple playback controls (pausing and skipping)
-```txt
-'c': exit the program when in active playback
-'n': skip one playlist forwards
-'l': skip one track forwards
-'j': skip one track backwards
-'k': pause or start the playback
+```toml
+c = "exit the program when in active playback"
+n = "skip one playlist forwards"
+l = "skip one track forwards"
+j = "skip one track backwards"
+k = "pause or start the playback"
 ```
 
 ###### NOTE: all files are loaded upon startup, meaning that there's a (os set) hard cap on playlist length.

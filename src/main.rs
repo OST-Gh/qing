@@ -42,7 +42,7 @@ struct Song {
 	file: Box<str>,
 }
 
-struct Initialisable {
+struct State {
 	output: (OutputStream, OutputStreamHandle),
 	control: JoinHandle<()>,
 	exit: Sender<u8>,
@@ -139,7 +139,7 @@ fn main() {
 	'queue: for path in files {
 
 		log!(info[path]: "Loading and parsing data from [{path}].");
-		let Songlist { mut song, name } = match fs::read_to_string(&path).map(|contents| toml::from_str(&contents)) {
+		let Songlist { mut song, name } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
 			Ok(Ok(playlist)) => playlist,
 			Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; continue 'queue),
 			Err(why) => log!(err[path]: "load the contents of [{path}]" => why; continue 'queue),
@@ -177,18 +177,17 @@ fn main() {
 		};
 		println!("\r\0");
 
-		let init = init.get_or_init(Initialisable::new);
+		let State { output, control, signal, .. } = init.get_or_init(State::initialise);
 
 
 		let length = song.len();
 		let mut index = 0;
 
-		'playlist: while index < length && !init.control.is_finished() {
+		'playlist: while index < length && !control.is_finished() {
 			let old = index; // (sort of) proxy to index (used because of rewind code)
 			// unless something is very wrong with the index (old), this will not error.
 			let (name, duration) = unsafe { song.get_unchecked(old) };
-			match init
-				.output
+			match output
 				.1
 				.play_once(unsafe { FILES.get_unchecked_mut(old) })
 			{
@@ -198,7 +197,7 @@ fn main() {
 					while &elapsed <= duration {
 						let now = Instant::now();
 						let paused = playback.is_paused();
-						elapsed += match init.signal.recv_deadline(now + FOURTH_SECOND) {
+						elapsed += match signal.recv_deadline(now + FOURTH_SECOND) {
 							Err(RecvTimeoutError::Timeout) => if paused { continue } else { FOURTH_SECOND },
 
 							Ok(Signal::ManualExit) => break 'queue,
@@ -224,13 +223,13 @@ fn main() {
 
 	init
 		.into_inner()
-		.map(Initialisable::exit);
+		.map(State::clean_up);
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	print!("\r\x1b[0m\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-impl Initialisable {
-	fn new() -> Self {
+impl State {
+	fn initialise() -> Self {
 		log!(info: "Determining the output device.");
 		let output = match rodio::OutputStream::try_default() {
 			Ok(handles) => handles,
@@ -273,16 +272,17 @@ impl Initialisable {
 		}
 	}
 
-	fn exit(self) {
+	fn clean_up(self) {
 		let Self { control, exit, .. } = self;
 
 		if !control.is_finished() {
 			if let Err(_) = exit.send(0) { log!(err: "send the exit signal to the playback control thread" => NO_DISPLAY) }
-		} // assume ok if not thread prob dead (finished)
+		} // assume that there's no error here. if there is, then the thread either finished(/panicked) 
 		if let Err(why) = control.join() {
 			let why = panic_payload(&why);
 			log!(err: "clean up the playback control thread" => why)
-		} // won't (probably) error.
+		}
 	}
 }
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
