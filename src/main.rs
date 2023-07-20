@@ -1,6 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//! I don't know why, but i'm making Docs for this
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
-	thread::{ spawn, JoinHandle },
+	thread::{ JoinHandle, Builder },
 	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
@@ -22,27 +24,35 @@ use crossterm::{
 use lofty::{ read_from_path, AudioFile };
 use crossbeam_channel::{ unbounded, RecvTimeoutError, Sender, Receiver };
 use rodio::{ OutputStream, OutputStreamHandle };
+use serde::Deserialize;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Constant signal rate.
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
+/// Constant used for rewinding.
 const SECOND: Duration = Duration::from_secs(1);
 
+/// Interthread communication channel disconnected.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Global audio stream data.
 static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
+/// Playlist
 struct Songlist {
-	name: Box<str>,
+	name: Option<Box<str>>,
 	song: Vec<Song>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
+/// Track
 struct Song {
-	name: Box<str>,
+	name: Option<Box<str>>,
 	file: Box<str>,
 	time: Option<isize>,
 }
 
+/// Bundled lazily initialised state.
 struct State {
 	output: (OutputStream, OutputStreamHandle),
 	control: JoinHandle<()>,
@@ -50,6 +60,7 @@ struct State {
 	signal: Receiver<Signal>,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// High level control signal repressentation
 enum Signal {
 	ManualExit, // signal sent by pb_ctl to main for indication of the user manually exiting
 	SkipPlaylist,
@@ -58,6 +69,7 @@ enum Signal {
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Macro for general interaction with Stdout.
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
@@ -70,6 +82,7 @@ macro_rules! log {
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!("\r\x1b[38;2;254;205;33m", $message, '\0') $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Format a text representation of a path into an absolute path.
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 	PathBuf::from(
 		text
@@ -92,8 +105,9 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err: "canonicalise a path" => why; PathBuf::new()))
 }
 
+/// Extract the panic payload out of thread err or panics.
 fn panic_payload(payload: &(dyn Any + Send)) -> String {
-	(&payload)
+	payload
 		.downcast_ref::<&str>()
 		.map(|slice| String::from(*slice))
 		.xor(
@@ -104,6 +118,7 @@ fn panic_payload(payload: &(dyn Any + Send)) -> String {
 		.unwrap()
 }
 
+/// Custom panic handle. (similar to log-err)
 fn panic_handle(info: &panic::PanicInfo) {
 	let panic = panic_payload(info.payload());
 	unsafe {
@@ -143,22 +158,19 @@ fn main() {
 			Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; continue 'queue),
 			Err(why) => log!(err[path]: "load the contents of [{path}]" => why; continue 'queue),
 		};
+		let name = name.unwrap_or_default();
 
 		let mut song: Vec<(Box<str>, Duration, isize)> = {
 
 			log!(info[name]: "Shuffling all of the songs in [{name}].");
-			let length = song.len();
-			for _ in 0..length * length { // l^2 for more shuffling and less chance for order
-				let old = generator.usize(0..length);
-				let new = generator.usize(0..length);
-				song.swap(old, new)
-			}
+			generator.shuffle(&mut song);
 
 			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
 				.into_iter()
 				.filter_map(|Song { name, file, time }|
 					{
+						let name = name.unwrap_or_default();
 						let formatted = fmt_path(file);
 						match (File::open(&formatted), read_from_path(formatted)) {
 							(Ok(contents), Ok(info)) => {
@@ -232,6 +244,7 @@ fn main() {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
+	/// Initialize state.
 	fn initialise() -> Self {
 		log!(info: "Determining the output device.");
 		let output = match rodio::OutputStream::try_default() {
@@ -246,26 +259,34 @@ impl State {
 		log!(info: "Spinning up the playback control thread.");
 		let (sender, signal) = unbounded();
 		let (exit, exit_receiver) = unbounded();
-		let control = spawn(move ||
-			while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
-				let signal = match match event::poll(FOURTH_SECOND) {
-					Ok(truth) => if truth { event::read() } else { continue },
-					Err(why) => panic!("poll an event from the current terminal  {why}"),
-				} {
-					Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
-						if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
-						return
-					},
-					Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipPlaylist,
-					Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
-					Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
-					Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
-					Err(why) => panic!("read an event from the current terminal  {why}"),
-					_ => continue,
-				};
-				if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+		let control = {
+			match Builder::new()
+				.name(String::from("Playback-Control"))
+				.spawn(move ||
+					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
+						let signal = match match event::poll(FOURTH_SECOND) {
+							Ok(truth) => if truth { event::read() } else { continue },
+							Err(why) => panic!("poll an event from the current terminal  {why}"),
+						} {
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
+								if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
+								return
+							},
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipPlaylist,
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
+							Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
+							Err(why) => panic!("read an event from the current terminal  {why}"),
+							_ => continue,
+						};
+						if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+					}
+				)
+			{
+				Ok(thread) => thread,
+				Err(why) => panic!("create the playback control thread  {why}"),
 			}
-		);
+		};
 
 		Self {
 			output,
@@ -275,6 +296,7 @@ impl State {
 		}
 	}
 
+	/// Clean-up the state.
 	fn clean_up(self) {
 		let Self { control, exit, .. } = self;
 		if !control.is_finished() {

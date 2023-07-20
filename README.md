@@ -2,10 +2,10 @@
 
 ## Usage: quing [playlist.toml...]
 ```toml
-name = "" # name of the playlist
+name = "" # optional name of the playlist
 
 [[song]]
-name = "" # name of the song
+name = "" # optional name of the song
 file = "" # file path pointing towards a file which contains audio data.
 # supported features:
 #  environment variables: ${NAME}
