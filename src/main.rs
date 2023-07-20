@@ -26,7 +26,7 @@ use rodio::{ OutputStream, OutputStreamHandle };
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 const SECOND: Duration = Duration::from_secs(1);
 
-const NO_DISPLAY: &'static str = "NO_DISPLAYABLE_ERROR_INFORMATION";
+const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -40,6 +40,7 @@ struct Songlist {
 struct Song {
 	name: Box<str>,
 	file: Box<str>,
+	time: Option<isize>,
 }
 
 struct State {
@@ -61,9 +62,7 @@ macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
 			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-			print!(" '\x1b[1m");
-			$(print!("\n\r{}", $why);)+
-			print!("\x1b[22m'");
+			$(print!(" '\x1b[1m{}\x1b[22m'", format!("{}", $why).replace('\n', "\r\n"));)+
 			println!("\x1b[24m\0");
 			$($($retaliation)+)?
 		}
@@ -145,7 +144,7 @@ fn main() {
 			Err(why) => log!(err[path]: "load the contents of [{path}]" => why; continue 'queue),
 		};
 
-		let song: Vec<(Box<str>, Duration)> = {
+		let mut song: Vec<(Box<str>, Duration, isize)> = {
 
 			log!(info[name]: "Shuffling all of the songs in [{name}].");
 			let length = song.len();
@@ -158,13 +157,13 @@ fn main() {
 			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 			song
 				.into_iter()
-				.filter_map(|Song { name, file }|
+				.filter_map(|Song { name, file, time }|
 					{
 						let formatted = fmt_path(file);
 						match (File::open(&formatted), read_from_path(formatted)) {
 							(Ok(contents), Ok(info)) => {
 								unsafe { FILES.push(BufReader::new(contents)) }
-								return Some(info.properties()).map(|info| (name, info.duration()))
+								return Some(info.properties()).map(|info| (name, info.duration(), time.unwrap_or(0)))
 							},
 							(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
 							(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
@@ -186,7 +185,7 @@ fn main() {
 		'playlist: while index < length && !control.is_finished() {
 			let old = index; // (sort of) proxy to index (used because of rewind code)
 			// unless something is very wrong with the index (old), this will not error.
-			let (name, duration) = unsafe { song.get_unchecked(old) };
+			let (name, duration, time) = unsafe { song.get_unchecked_mut(old) };
 			match output
 				.1
 				.play_once(unsafe { FILES.get_unchecked_mut(old) })
@@ -202,7 +201,10 @@ fn main() {
 
 							Ok(Signal::ManualExit) => break 'queue,
 							Ok(Signal::SkipPlaylist) => break 'playlist,
-							Ok(Signal::SkipNext) => break,
+							Ok(Signal::SkipNext) => {
+								*time = 0;
+								break
+							},
 							Ok(Signal::SkipBack) => break 'playback index -= (old > 0 && elapsed <= SECOND) as usize,
 							Ok(Signal::TogglePlayback) => {
 								if paused { playback.play() } else { playback.pause() }
@@ -212,13 +214,14 @@ fn main() {
 							Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 						};
 					}
-					index += 1
+					if *time == 0 { index += 1 } else { *time -= 1 }
 				},
 				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 			};
 			if let Err(why) = unsafe { FILES.get_unchecked_mut(old) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 		}
 		unsafe { FILES.clear() }
+		print!("\r\n\n\0");
 	}
 
 	init
@@ -251,7 +254,7 @@ impl State {
 				} {
 					Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
 						if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
-						break
+						return
 					},
 					Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipPlaylist,
 					Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
@@ -260,7 +263,7 @@ impl State {
 					Err(why) => panic!("read an event from the current terminal  {why}"),
 					_ => continue,
 				};
-				if let Err(_) = sender.send(signal) { panic!("send a signal to the playback") }
+				if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 			}
 		);
 
@@ -276,7 +279,8 @@ impl State {
 		let Self { control, exit, .. } = self;
 
 		if !control.is_finished() {
-			if let Err(_) = exit.send(0) { log!(err: "send the exit signal to the playback control thread" => NO_DISPLAY) }
+			let _ = exit.send(0); // error might occur between check, manual shutdown on control side, and exit signal sending
+			// not really an error.
 		} // assume that there's no error here. if there is, then the thread either finished(/panicked) 
 		if let Err(why) = control.join() {
 			let why = panic_payload(&why);
@@ -284,5 +288,4 @@ impl State {
 		}
 	}
 }
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

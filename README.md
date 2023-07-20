@@ -2,18 +2,18 @@
 
 ## Usage: quing [playlist.toml...]
 ```toml
-# playlist.toml
-# NOTE: does not need to be a toml file as long it is the toml format
-
-name = "Foo" # name of the playlist
+name = "" # name of the playlist
 
 [[song]]
-name = "Bar"              # name of an individual playlist entry
-file = "$PATH/to/bar.mp3" # path to file, supports environment variables and '~'
+name = "" # name of the song
+file = "" # file path pointing towards a file which contains audio data.
+# supported features:
+#  environment variables: ${NAME}
+#  ~ as a shortcut for $HOME
+#
+# NOTE: it isn't suggested to use relative paths, for files.
 
-[[song]]
-name = "Baz"
-file = "~/baz.wav"
+time = -1 # optional setting for repeating a song n times. if the number is negative, it'll repeat infinitely.
 ```
 
 ## Controls:
