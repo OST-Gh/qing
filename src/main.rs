@@ -113,7 +113,7 @@ fn panic_handle(info: &panic::PanicInfo) {
 		let message = panic.get_unchecked(0);
 		let reason = panic
 			.get(1)
-			.unwrap_or(&"NO_DISPLAYABLE_INFO")
+			.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 			.replace('\n', "\r\n");
 		println!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occured whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0")
 	};
@@ -277,7 +277,6 @@ impl State {
 
 	fn clean_up(self) {
 		let Self { control, exit, .. } = self;
-
 		if !control.is_finished() {
 			let _ = exit.send(0); // error might occur between check, manual shutdown on control side, and exit signal sending
 			// not really an error.
