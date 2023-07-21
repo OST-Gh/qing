@@ -9,6 +9,7 @@ name = "" # optional name of the song
 file = "" # file path pointing towards a file which contains audio data.
 # supported features:
 #  environment variables: ${NAME}
+#  NOTE: redcursive variables also work: $${NAME} => ${VALUE_OF_NAME} => {VALUE_OF_VALUE_OF_NAME}
 #  ~ as a shortcut for $HOME
 #
 # NOTE: it isn't suggested to use relative paths, for files.
