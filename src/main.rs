@@ -7,7 +7,11 @@ use std::{
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
 	io::{ BufReader, Seek },
-	env::{ var, args },
+	env::{
+		var,
+		args,
+		VarError,
+	},
 	cell::OnceCell,
 	panic,
 	any::Any,
@@ -84,14 +88,22 @@ macro_rules! log {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
 fn fmt_path(text: impl AsRef<str>) -> PathBuf {
+	fn expand(name: &str) -> Result<String, VarError> {
+		let mut buffer = Vec::new();
+		for part in var(if name.starts_with('$') { expand(&name[1..])? } else { String::from(name) })?
+			.split(MAIN_SEPARATOR_STR)
+			.map(|part| if part.starts_with('$') { expand(&part[1..]) } else { Ok(String::from(part)) })
+		{ buffer.push(part?) }
+		Ok(buffer.join(MAIN_SEPARATOR_STR))
+	}
 	PathBuf::from(
 		text
 			.as_ref()
 			.split(MAIN_SEPARATOR_STR)
 			.filter_map(|part|
 				match match part {
-					"~" => var("HOME"),
-					_ if part.starts_with('$') => var(&part[1..]),
+					"~" => expand("HOME"),
+					_ if part.starts_with('$') => expand(&part[1..]), // add support for multiple $ vars ($$VAR => $VALUE_OF_VAR => VALUE_OF_VALUE_OF_VAR)
 					_ => return Some(String::from(part)),
 				} {
 					Ok(part) => Some(part),
@@ -100,7 +112,7 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 			)
 			.collect::<Vec<String>>()
 			.join(MAIN_SEPARATOR_STR)
-	)
+	)// esc(\) parsing
 		.canonicalize()
 		.unwrap_or_else(|why| log!(err: "canonicalise a path" => why; PathBuf::new()))
 }
