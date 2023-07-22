@@ -37,6 +37,9 @@ const SECOND: Duration = Duration::from_secs(1);
 
 /// Inter-thread communication channel disconnected.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
+
+/// Exit text sequence
+const EXIT: fn() = || print!("\r\x1b[0m\0");
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Global audio stream data.
 static mut FILES: Vec<BufReader<File>> = Vec::new();
@@ -80,7 +83,7 @@ enum Signal {
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
-			print!(concat!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			print!(concat!("\r\x1b[4mAn error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '\x1b[1m{}\x1b[22m'", format!("{}", $why).replace('\n', "\r\n"));)+
 			println!("\x1b[24m\0");
 			$($($retaliation)+)?
@@ -90,7 +93,7 @@ macro_rules! log {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
-fn fmt_path(text: impl AsRef<str>) -> PathBuf {
+fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	fn expand(name: &str) -> Result<String, VarError> {
 		let mut buffer = Vec::new();
 		for part in var(if name.starts_with('$') { expand(&name[1..])? } else { String::from(name) })?
@@ -99,9 +102,10 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 		{ buffer.push(part?) }
 		Ok(buffer.join(MAIN_SEPARATOR_STR))
 	}
+
+	let path = path.as_ref();
 	PathBuf::from(
-		text
-			.as_ref()
+		path
 			.split(MAIN_SEPARATOR_STR)
 			.filter_map(|part|
 				match match part {
@@ -110,14 +114,14 @@ fn fmt_path(text: impl AsRef<str>) -> PathBuf {
 					_ => return Some(String::from(part)),
 				} {
 					Ok(part) => Some(part),
-					Err(why) => log!(err: "expand a shell expression to a path" => why; None)
+					Err(why) => log!(err[part]: "expand the shell expression [{part}] to a path" => why; None)
 				}
 			)
 			.collect::<Vec<String>>()
 			.join(MAIN_SEPARATOR_STR)
 	)
 		.canonicalize()
-		.unwrap_or_else(|why| log!(err: "canonicalise a path" => why; PathBuf::new()))
+		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
 }
 
 /// Extract the panic payload out of thread err or panics.
@@ -145,8 +149,9 @@ fn panic_handle(info: &panic::PanicInfo) {
 			.get(1)
 			.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 			.replace('\n', "\r\n");
-		println!("\r\x1b[38;2;254;205;33m\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0")
-	};
+		println!("\r\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0")
+	}
+	EXIT()
 }
 
 fn next(time: &mut isize, index: &mut usize) {
@@ -155,16 +160,29 @@ fn next(time: &mut isize, index: &mut usize) {
 
 fn main() {
 	panic::set_hook(Box::new(panic_handle));
+	{
+		let default: Vec<u8> = vec![254, 205, 033];
+		let colours: Vec<u8>;
+		if let Ok(text) = var("COLOUR") {
+			let inner_colours: Vec<u8> = text
+				.split(|symbol: char| !symbol.is_numeric())
+				.filter_map(|text|
+					text
+						.parse::<u8>()
+						.ok()
+				)
+				.collect();
+			colours = if inner_colours.len() < 3 { default } else { inner_colours }
+		} else { colours = default };
+		print!("\x1b[38;2;{};{};{}m", colours[0], colours[1], colours[2]);
+	}
 
 	let mut files = args()
-		.skip(1) // skips the executable path (e.g.: //usr/local/bin/{bin-name})
+		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.peekable();
-	if files
-		.peek()
-		.is_none() // can't run without one playlist
-	{ panic!("get the program arguments  no arguments given") }
+	if let None = files.peek() { panic!("get the program arguments  no arguments given") }
 
-	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return) }
+	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return EXIT()) }
 
 	let mut generator = fastrand::Rng::new();
 	let init = OnceCell::new(); // expensive operation only executed if no err.
@@ -181,6 +199,8 @@ fn main() {
 			}
 		)
 		.collect();
+	print!("\r\n\n\0");
+
 	let length = lists.len();
 	let mut list_index = 0;
 	'queue: while list_index < length {
@@ -213,7 +233,7 @@ fn main() {
 				)
 				.collect()
 		};
-		println!("\r\0");
+		print!("\r\n\0");
 
 		let State { output, control, signal, .. } = init.get_or_init(State::initialise);
 
@@ -280,7 +300,7 @@ fn main() {
 		.into_inner()
 		.map(State::clean_up);
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	print!("\r\x1b[0m\0")
+	EXIT()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
