@@ -3,9 +3,10 @@
 ## Usage: quing [playlist.toml...]
 ```toml
 name = "" # optional name of the playlist
+time = -1 # optional setting for repeating a playlist n times. if the number is below zero, it'll repeat infinitely
 
 [[song]]
-name = "" # optional name of the song
+name = "" # same as playlist-level name, for a song.
 file = "" # file path pointing towards a file which contains audio data.
 # supported features:
 #  environment variables: ${NAME}
@@ -14,7 +15,7 @@ file = "" # file path pointing towards a file which contains audio data.
 #
 # NOTE: it isn't suggested to use relative paths, for files.
 
-time = -1 # optional setting for repeating a song n times. if the number is negative, it'll repeat infinitely.
+time = -1 # similar to playlist-level time, but for a single song.
 ```
 
 ## Controls:
@@ -28,4 +29,5 @@ j = "skip one track backwards"
 k = "pause or start the playback"
 ```
 
-###### NOTE: all files are loaded upon startup, meaning that there's a (os set) hard cap on playlist length.
+###### NOTE: all inputted playlists are loaded upon starting.
+###### NOTE: all files of the playlist are loaded when it is its turn to play.
