@@ -46,8 +46,7 @@ static mut FILES: Vec<BufReader<File>> = Vec::new();
 struct Songlist {
 	name: Option<Box<str>>,
 	song: Vec<Song>,
-        :close
-
+	time: Option<isize>,
 }
 
 #[derive(Deserialize)]
