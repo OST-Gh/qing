@@ -1,17 +1,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//! I don't know why, but i am making Docs for this
+//! I don't know why, but i am making Docs for this.
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	thread::{ JoinHandle, Builder },
-	fs::{ self, File },
 	path::{ PathBuf, MAIN_SEPARATOR_STR },
 	time::{ Duration, Instant },
-	io::{ BufReader, Seek },
-	env::{
-		var,
-		args,
-		VarError,
-	},
+	io::{ Seek, BufReader },
+	fs::File,
+	env::{ var, args, VarError },
 	cell::OnceCell,
 	panic,
 	any::Any,
@@ -25,10 +21,14 @@ use crossterm::{
 		KeyCode,
 	},
 };
-use lofty::{ read_from_path, AudioFile };
 use crossbeam_channel::{ unbounded, RecvTimeoutError, Sender, Receiver };
 use rodio::{ OutputStream, OutputStreamHandle };
 use serde::Deserialize;
+use fastrand::Rng;
+use load::{ songs, songlists };
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Module for interacting with the file-system.
+mod load;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate.
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
@@ -80,10 +80,11 @@ enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Macro for general interaction with Standard-out.
+#[macro_export]
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
-			print!(concat!("\r\x1b[4mAn error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			print!(concat!("\r\x1b[4mA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '\x1b[1m{}\x1b[22m'", format!("{}", $why).replace('\n', "\r\n"));)+
 			println!("\x1b[24m\0");
 			$($($retaliation)+)?
@@ -137,33 +138,28 @@ fn panic_payload(payload: &(dyn Any + Send)) -> String {
 		.unwrap()
 }
 
-/// Custom panic handle. (similar to log-err)
-fn panic_handle(info: &panic::PanicInfo) {
-	let panic = panic_payload(info.payload());
-	unsafe {
-		let panic = panic
-			.splitn(2, "  ")
-			.collect::<Vec<&str>>();
-		let message = panic.get_unchecked(0);
-		let reason = panic
-			.get(1)
-			.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
-			.replace('\n', "\r\n");
-		println!("\r\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0")
-	}
-	EXIT()
-}
-
-fn next(time: &mut isize, index: &mut usize) {
-	if *time == 0 { *index += 1 } else { *time -= 1 }
-}
-
 fn main() {
-	panic::set_hook(Box::new(panic_handle));
+	panic::set_hook(
+		Box::new(|info|
+			unsafe {
+				let panic = panic_payload(info.payload());
+				let panic = panic
+					.splitn(2, "  ")
+					.collect::<Vec<&str>>();
+				let message = panic.get_unchecked(0);
+				let reason = panic
+					.get(1)
+					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
+					.replace('\n', "\r\n");
+				println!("\r\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0");
+				EXIT()
+			}
+		)
+	);
+
 	{
-		let default: Vec<u8> = vec![254, 205, 033];
-		let colours: Vec<u8>;
-		if let Ok(text) = var("COLOUR") {
+		let default = vec![254, 205, 033];
+		let colours = if let Ok(text) = var("COLOUR") {
 			let inner_colours: Vec<u8> = text
 				.split(|symbol: char| !symbol.is_numeric())
 				.filter_map(|text|
@@ -172,68 +168,43 @@ fn main() {
 						.ok()
 				)
 				.collect();
-			colours = if inner_colours.len() < 3 { default } else { inner_colours }
-		} else { colours = default };
+			if inner_colours.len() < 3 { default } else { inner_colours }
+		} else { default };
 		print!("\x1b[38;2;{};{};{}m", colours[0], colours[1], colours[2]);
 	}
 
-	let mut files = args()
-		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
-		.peekable();
-	if let None = files.peek() { panic!("get the program arguments  no arguments given") }
+	let mut lists = {
+		let mut files = args()
+			.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
+			.peekable();
+		if let None = files.peek() { panic!("get the program arguments  no arguments given") }
 
-	if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return EXIT()) }
+		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return EXIT()) }
 
-	let mut generator = fastrand::Rng::new();
+		songlists(files)
+	};
 	let init = OnceCell::new(); // expensive operation only executed if no err.
-	let mut lists: Vec<(Vec<Song>, Box<str>, isize)> = files
-		.filter_map(|path|
-			{
-				log!(info[path]: "Loading and parsing data from [{path}].");
-				let Songlist { song, name, time } = match fs::read_to_string(fmt_path(&path)).map(|contents| toml::from_str(&contents)) {
-					Ok(Ok(playlist)) => playlist,
-					Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; None?),
-					Err(why) => log!(err[path]: "load the contents of [{path}]" => why; None?),
-				};
-				Some((song, name.unwrap_or_default(), time.unwrap_or_default()))
-			}
-		)
-		.collect();
-	print!("\r\n\n\0");
+	let mut generator = Rng::new();
 
 	let length = lists.len();
 	let mut list_index = 0;
 	'queue: while list_index < length {
 		let old_list_index = list_index;
-		let (song, name, list_time) = unsafe { lists.get_unchecked_mut(old_list_index) };
-		let mut song = song.clone();
-		let mut song: Vec<(Box<str>, Duration, isize)> = {
+		let (name, song, list_time) = unsafe { lists.get_unchecked_mut(old_list_index) };
 
-			log!(info[name]: "Shuffling all of the songs in [{name}].");
-			generator.shuffle(&mut song);
+		log!(info[name]: "Shuffling all of the songs in [{name}].");
+		let length = song.len();
+		for value in 0..length {
+			let index = value % length;
+			song.swap(index, generator.usize(0..=index));
+			song.swap(index, generator.usize(index..length));
+			// a b c; b inclusive in both random ranges
+			// b a c
+			// b c a
+		}
 
-			log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
-			song
-				.into_iter()
-				.filter_map(|Song { name, file, time }|
-					{
-						let name = name.unwrap_or_default();
-						let formatted = fmt_path(file);
-						match (File::open(&formatted), read_from_path(formatted)) {
-							(Ok(contents), Ok(info)) => {
-								unsafe { FILES.push(BufReader::new(contents)) }
-								return Some(info.properties()).map(|info| (name, info.duration(), time.unwrap_or(0)))
-							},
-							(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
-							(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
-							(Err(file_why), Err(info_why)) => log!(err[name]: "load the audio contents and properties of [{name}]" => file_why info_why),
-						}
-						None
-					}
-				)
-				.collect()
-		};
-		print!("\r\n\0");
+		let mut song = songs(&name, &song);
+
 
 		let State { output, control, signal, .. } = init.get_or_init(State::initialise);
 
@@ -242,7 +213,7 @@ fn main() {
 		let mut song_index = 0;
 
 		'list_playback: { // i hate this
-			'playlist: while song_index < length && !control.is_finished() {
+			while song_index < length && !control.is_finished() {
 				let old_song_index = song_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
 				let (name, duration, song_time) = unsafe { song.get_unchecked_mut(old_song_index) };
@@ -262,18 +233,14 @@ fn main() {
 								Ok(Signal::ManualExit) => break 'queue,
 
 								Ok(Signal::SkipNextPlaylist) => {
-									*list_time = 0;
-									break 'playlist
-								},
-								Ok(Signal::SkipBackPlaylist) => {
-									list_index -= (old_list_index > 0 && elapsed <= SECOND) as usize;
+									list_index += 1;
 									break 'list_playback
 								},
-
 								Ok(Signal::SkipNext) => {
-									*song_time = 0;
-									break
+									song_index += 1;
+									break 'song_playback
 								},
+								Ok(Signal::SkipBackPlaylist) => break 'list_playback list_index -= (old_list_index > 0 && elapsed <= SECOND) as usize,
 								Ok(Signal::SkipBack) => break 'song_playback song_index -= (old_song_index > 0 && elapsed <= SECOND) as usize,
 
 								Ok(Signal::TogglePlayback) => {
@@ -284,13 +251,13 @@ fn main() {
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 							};
 						}
-						next(song_time, &mut song_index)
+						if *song_time == 0 { song_index += 1 } else { *song_time -= 1 }
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				};
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_song_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
-			next(list_time, &mut list_index);
+			if *list_time == 0 { list_index += 1 } else { *list_time -= 1 }
 		}
 		unsafe { FILES.clear() }
 		print!("\r\n\n\0");
@@ -299,8 +266,6 @@ fn main() {
 	init
 		.into_inner()
 		.map(State::clean_up);
-	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	EXIT()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
@@ -368,6 +333,8 @@ impl State {
 			let why = panic_payload(&why);
 			log!(err: "clean up the playback control thread" => why)
 		}
+		if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+		EXIT()
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
