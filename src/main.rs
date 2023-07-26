@@ -30,7 +30,7 @@ use load::{ songs, songlists };
 /// Module for interacting with the file-system.
 mod load;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Constant signal rate.
+/// Constant signal rate (tick rate).
 const FOURTH_SECOND: Duration = Duration::from_millis(250);
 /// Constant used for rewinding.
 const SECOND: Duration = Duration::from_secs(1);
@@ -45,7 +45,7 @@ const EXIT: fn() = || print!("\r\x1b[0m\0");
 static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
-/// Playlist
+/// A playlist with some metadata
 struct Songlist {
 	name: Option<Box<str>>,
 	song: Vec<Song>,
@@ -54,7 +54,7 @@ struct Songlist {
 
 #[derive(Deserialize)]
 #[derive(Clone)]
-/// Track
+/// A song path with aditional metadata
 struct Song {
 	name: Option<Box<str>>,
 	file: Box<str>,
@@ -79,8 +79,8 @@ enum Signal {
 	TogglePlayback,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Macro for general interaction with Standard-out.
 #[macro_export]
+/// Macro for general interaction with Standard-out.
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
@@ -251,68 +251,64 @@ fn main() {
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 							};
 						}
-						if *song_time == 0 { song_index += 1 } else { *song_time -= 1 }
+						if *song_time == 0 { song_index += 1 } else {
+							log!(info[name]: "Repeating the song [{name}]");
+							*song_time -= 1
+						}
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				};
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_song_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
-			if *list_time == 0 { list_index += 1 } else { *list_time -= 1 }
+			if *list_time == 0 { list_index += 1 } else {
+				log!(info[name]: "Reloading the playlist [{name}]");
+				*list_time -= 1
+			}
 		}
 		unsafe { FILES.clear() }
 		print!("\r\n\n\0");
 	}
 
-	init
-		.into_inner()
-		.map(State::clean_up);
+	if let Some(inner) = init.into_inner() { inner.clean_up() }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
 	/// Initialize state.
 	fn initialise() -> Self {
 		log!(info: "Determining the output device.");
-		let output = match rodio::OutputStream::try_default() {
-			Ok(handles) => handles,
-			Err(why) => {
-				if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-				panic!("determine the default audio output device  {why}")
-			},
-		};
+		let output = rodio::OutputStream::try_default()
+			.unwrap_or_else(|why|
+				{
+					if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+					panic!("determine the default audio output device  {why}")
+				}
+			);
 
 
 		log!(info: "Spinning up the playback control thread.");
 		let (sender, signal) = unbounded();
 		let (exit, exit_receiver) = unbounded();
-		let control = {
-			match Builder::new()
-				.name(String::from("Playback-Control"))
-				.spawn(move ||
-					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
-						let signal = match match event::poll(FOURTH_SECOND) {
-							Ok(truth) => if truth { event::read() } else { continue },
-							Err(why) => panic!("poll an event from the current terminal  {why}"),
-						} {
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. })) => {
-								if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
-								return
-							},
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. })) => Signal::SkipNextPlaylist,
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. })) => Signal::SkipBackPlaylist,
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. })) => Signal::SkipNext,
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. })) => Signal::SkipBack,
-							Ok(Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. })) => Signal::TogglePlayback,
-							Err(why) => panic!("read an event from the current terminal  {why}"),
-							_ => continue,
-						};
-						if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
-					}
-				)
-			{
-				Ok(thread) => thread,
-				Err(why) => panic!("create the playback control thread  {why}"),
-			}
-		};
+		let control = Builder::new()
+			.name(String::from("Playback-Control"))
+			.spawn(move ||
+				while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
+					if !event::poll(FOURTH_SECOND).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+						Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. }) => {
+							if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
+							return
+						},
+						Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::SkipNextPlaylist,
+						Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. }) => Signal::SkipBackPlaylist,
+						Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. }) => Signal::SkipNext,
+						Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. }) => Signal::SkipBack,
+						Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. }) => Signal::TogglePlayback,
+						_ => continue,
+					};
+					if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+				}
+			)
+			.unwrap_or_else(|why| panic!("create the playback control thread  {why}"));
 
 		Self {
 			output,
