@@ -12,11 +12,11 @@ readme = "README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"], default-features = false }
-toml = { version = "0.7", features = ["parse"], default-features = false }
-crossterm = { version = "0.26", default-features = false }
-crossbeam-channel = "0.5"
-rodio = "0.17"
-lofty = "0.15"
+toml = { version = "0", features = ["parse"], default-features = false }
+crossterm = { version = "0", default-features = false }
+crossbeam-channel = "0"
+rodio = "0"
+lofty = "0"
 fastrand = "2"
 
 [profile.release]
