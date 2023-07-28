@@ -2,47 +2,41 @@
 //! I don't know why, but i am making Docs for this.
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
-	thread::{ JoinHandle, Builder },
-	path::{ PathBuf, MAIN_SEPARATOR_STR },
-	time::{ Duration, Instant },
-	io::{ Seek, BufReader },
-	fs::File,
-	env::{ var, args, VarError },
-	cell::OnceCell,
 	panic,
+	cell::OnceCell,
+	fs::File,
 	any::Any,
+	path::{ MAIN_SEPARATOR_STR, PathBuf },
+	time::{ Duration, Instant },
+	io::{ BufReader, Seek },
+	env::{ VarError, var, args },
 };
-use crossterm::{
-	terminal::{ enable_raw_mode, disable_raw_mode },
-	event::{
-		self,
-		Event,
-		KeyEvent,
-		KeyCode,
-	},
-};
-use crossbeam_channel::{ unbounded, RecvTimeoutError, Sender, Receiver };
-use rodio::{ OutputStream, OutputStreamHandle };
+use crossterm::terminal::{ enable_raw_mode, disable_raw_mode };
+use crossbeam_channel::RecvTimeoutError;
 use serde::Deserialize;
 use fastrand::Rng;
-use load::{ songs, songlists };
+use load::{
+	FILES,
+	get_file,
+	clear_files,
+	songs,
+	songlists,
+};
+use state::{ State, Signal };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Module for interacting with the file-system.
 mod load;
+
+/// Runtime state struct declaration and implementations.
+mod state;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
-const FOURTH_SECOND: Duration = Duration::from_millis(250);
+const TICK: Duration = Duration::from_millis(250);
 /// Constant used for rewinding.
 const SECOND: Duration = Duration::from_secs(1);
 
 /// Inter-thread communication channel disconnected.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
-
-/// Exit text sequence
-const EXIT: fn() = || print!("\r\x1b[0m\0");
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Global audio stream data.
-static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 /// A playlist with some metadata
@@ -60,24 +54,6 @@ struct Song {
 	file: Box<str>,
 	time: Option<isize>,
 }
-
-/// Bundled lazily initialised state.
-struct State {
-	output: (OutputStream, OutputStreamHandle),
-	control: JoinHandle<()>,
-	exit: Sender<u8>,
-	signal: Receiver<Signal>,
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// High level control signal representation
-enum Signal {
-	ManualExit,
-	SkipNextPlaylist,
-	SkipBackPlaylist,
-	SkipNext,
-	SkipBack,
-	TogglePlayback,
-}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
 /// Macro for general interaction with Standard-out.
@@ -93,6 +69,9 @@ macro_rules! log {
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Print the reset ansi sequence.
+fn exit_sequence() { print!("\r\x1b[0m\0") }
+
 /// Format a text representation of a path into an absolute path.
 fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	fn expand(name: &str) -> Result<String, VarError> {
@@ -152,7 +131,7 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				println!("\r\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0");
-				EXIT()
+				exit_sequence()
 			}
 		)
 	);
@@ -179,7 +158,7 @@ fn main() {
 			.peekable();
 		if let None = files.peek() { panic!("get the program arguments  no arguments given") }
 
-		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return EXIT()) }
+		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit_sequence()) }
 
 		songlists(files)
 	};
@@ -206,29 +185,26 @@ fn main() {
 		let mut song = songs(&name, &song);
 
 
-		let State { output, control, signal, .. } = init.get_or_init(State::initialise);
+		let state = init.get_or_init(State::initialise);
 
 
 		let length = song.len();
 		let mut song_index = 0;
 
 		'list_playback: { // i hate this
-			while song_index < length && !control.is_finished() {
+			while song_index < length && !state.is_alive() {
 				let old_song_index = song_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
 				let (name, duration, song_time) = unsafe { song.get_unchecked_mut(old_song_index) };
-				match output
-					.1
-					.play_once(unsafe { FILES.get_unchecked_mut(old_song_index) })
-				{
+				match state.play_file(get_file(old_song_index)) {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 						let mut elapsed = Duration::ZERO;
 						while &elapsed <= duration {
 							let now = Instant::now();
 							let paused = playback.is_paused();
-							elapsed += match signal.recv_deadline(now + FOURTH_SECOND) {
-								Err(RecvTimeoutError::Timeout) => if paused { continue } else { FOURTH_SECOND },
+							elapsed += match state.receive_signal(now) {
+								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
 								Ok(Signal::ManualExit) => break 'queue,
 
@@ -265,72 +241,15 @@ fn main() {
 				*list_time -= 1
 			}
 		}
-		unsafe { FILES.clear() }
+		clear_files();
 		print!("\r\n\n\0");
 	}
 
-	if let Some(inner) = init.into_inner() { inner.clean_up() }
-}
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-impl State {
-	/// Initialize state.
-	fn initialise() -> Self {
-		log!(info: "Determining the output device.");
-		let output = rodio::OutputStream::try_default()
-			.unwrap_or_else(|why|
-				{
-					if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-					panic!("determine the default audio output device  {why}")
-				}
-			);
-
-
-		log!(info: "Spinning up the playback control thread.");
-		let (sender, signal) = unbounded();
-		let (exit, exit_receiver) = unbounded();
-		let control = Builder::new()
-			.name(String::from("Playback-Control"))
-			.spawn(move ||
-				while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(FOURTH_SECOND) {
-					if !event::poll(FOURTH_SECOND).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-						Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. }) => {
-							if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
-							return
-						},
-						Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::SkipNextPlaylist,
-						Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. }) => Signal::SkipBackPlaylist,
-						Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. }) => Signal::SkipNext,
-						Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. }) => Signal::SkipBack,
-						Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. }) => Signal::TogglePlayback,
-						_ => continue,
-					};
-					if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
-				}
-			)
-			.unwrap_or_else(|why| panic!("create the playback control thread  {why}"));
-
-		Self {
-			output,
-			control,
-			exit,
-			signal,
-		}
-	}
-
-	/// Clean-up the state.
-	fn clean_up(self) {
-		let Self { control, exit, .. } = self;
-		if !control.is_finished() {
-			let _ = exit.send(0); // error might occur between check, manual shutdown on control side, and exit signal sending
-			// not really an error.
-		} // assume that there's no error here. If there is, then the thread either finished(/panicked) 
-		if let Err(why) = control.join() {
-			let why = panic_payload(&why);
-			log!(err: "clean up the playback control thread" => why)
-		}
+	if let Some(inner) = init.into_inner() {
+		inner.notify_exit();
+		inner.clean_up();
 		if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-		EXIT()
+		exit_sequence()
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
