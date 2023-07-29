@@ -269,11 +269,11 @@ fn main() {
 											volume_before_mute = volume;
 											volume = 0.
 										},
-										Signal::VolumeIncrease => volume += 0.25,
-										Signal::VolumeDecrease => volume -= 0.25,
+										Signal::VolumeIncrease => volume += 0.05,
+										Signal::VolumeDecrease => volume -= 0.05,
 										_ => unimplemented!()
 									}
-									volume = volume.clamp(0., 3.);
+									volume = volume.clamp(0., 2.);
 									playback.set_volume(volume);
 									now.elapsed()
 								},
