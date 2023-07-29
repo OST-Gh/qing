@@ -4,7 +4,7 @@
 use std::{
 	panic,
 	cell::OnceCell,
-	io::Seek,
+	io::{ Seek, Write, stdout },
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
 	env::{ VarError, var, args },
@@ -170,10 +170,11 @@ fn main() {
 	const SECOND: Duration = Duration::from_secs(1);
 
 
+	let mut volume = 1.;
+	let mut volume_before_mute = 1.;
+
 	let length = lists.len();
 	let mut list_index = 0;
-	let mut volume_of_previous_track = 1.;
-	let mut volume_before_mute = 1.;
 	'queue: while list_index < length {
 		let old_list_index = list_index;
 		let (name, song, list_time) = unsafe { lists.get_unchecked_mut(old_list_index) };
@@ -192,7 +193,6 @@ fn main() {
 		let mut song = songs(&name, &song);
 		let state = init.get_or_init(State::initialise);
 
-
 		'list_playback: { // i hate this
 			let length = song.len();
 			let mut song_index = 0;
@@ -204,12 +204,16 @@ fn main() {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 
-						playback.set_volume(volume_of_previous_track);
+						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
 						while &elapsed <= duration {
-							let now = Instant::now();
 							let paused = playback.is_paused();
+
+							print!("\r[{}][{volume:.3}]:\0", if paused { "Paused " } else { "Playing" });
+							if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
+
+							let now = Instant::now();
 							elapsed += match state.receive_signal(now) {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
@@ -233,7 +237,6 @@ fn main() {
 								},
 
 								Ok(signal @ (Signal::VolumeIncrease | Signal::VolumeDecrease | Signal::VolumeToggle)) => {
-									let mut volume = playback.volume();
 									match signal {
 										Signal::VolumeToggle => if volume <= 0. { volume = volume_before_mute } else {
 											volume_before_mute = volume;
@@ -244,7 +247,6 @@ fn main() {
 										_ => unimplemented!()
 									}
 									volume = volume.clamp(0., 3.);
-									volume_of_previous_track = volume;
 									playback.set_volume(volume);
 									now.elapsed()
 								},
@@ -267,7 +269,7 @@ fn main() {
 			}
 		}
 		map_files(Vec::clear);
-		print!("\r\n\n\0");
+		print!("\r                 \n\n\0");
 	}
 
 	if let Some(inner) = init.into_inner() {
