@@ -10,7 +10,6 @@ use crossbeam_channel::{
 	Sender,
 	Receiver,
 };
-use std::thread::{ Builder, JoinHandle };
 use crossterm::event::{
 	self,
 	Event,
@@ -20,6 +19,7 @@ use crossterm::event::{
 use std::{
 	fs::File,
 	io::BufReader,
+	thread::{ Builder, JoinHandle },
 };
 use super::{
 	TICK,
@@ -35,8 +35,8 @@ use super::{
 /// The values, that the structure contains, will be initialised if the program successfully loads at least a single playlist.
 /// Generally, this means, that this state type is always contained inside a type that can be uninitialised, e.g: OnceCell, or a mutable Option.
 pub(crate) struct State {
-	output: (OutputStream, OutputStreamHandle),
-	control: JoinHandle<()>,
+	sound_out: (OutputStream, OutputStreamHandle),
+	control_thread: JoinHandle<()>,
 	exit: Sender<u8>,
 	signal: Receiver<Signal>,
 }
@@ -58,7 +58,7 @@ impl State {
 	/// Initialize state.
 	pub(crate) fn initialise() -> Self {
 		log!(info: "Determining the output device.");
-		let output = rodio::OutputStream::try_default()
+		let sound_out = rodio::OutputStream::try_default()
 			.unwrap_or_else(|why|
 				{
 					if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
@@ -70,7 +70,7 @@ impl State {
 		log!(info: "Spinning up the playback control thread.");
 		let (sender, signal) = unbounded();
 		let (exit, exit_receiver) = unbounded();
-		let control = Builder::new()
+		let control_thread = Builder::new()
 			.name(String::from("Playback-Control"))
 			.spawn(move ||
 				while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
@@ -96,8 +96,8 @@ impl State {
 			.unwrap_or_else(|why| panic!("create the playback control thread  {why}"));
 
 		Self {
-			output,
-			control,
+			sound_out,
+			control_thread,
 			exit,
 			signal,
 		}
@@ -106,7 +106,7 @@ impl State {
 	/// Clean-up the state.
 	pub(crate) fn clean_up(self) {
 		if let Err(why) = self
-			.control
+			.control_thread
 			.join()
 		{
 			let why = why
@@ -126,14 +126,14 @@ impl State {
 	/// Check wether or not the playback control thread is still running.
 	pub(crate) fn is_alive(&self) -> bool {
 		!self
-			.control
+			.control_thread
 			.is_finished()
 	}
 
 	/// Play a single file.
 	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
 		self
-			.output
+			.sound_out
 			.1
 			.play_once(song)
 	}

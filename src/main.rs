@@ -9,7 +9,20 @@ use std::{
 	time::{ Duration, Instant },
 	env::{ VarError, var, args },
 };
-use crossterm::terminal::{ enable_raw_mode, disable_raw_mode };
+use crossterm::{
+	execute,
+	cursor::{ Show, Hide },
+	terminal::{
+		Clear,
+		ClearType,
+		enable_raw_mode,
+		disable_raw_mode
+	},
+	style::{
+		SetForegroundColor as SetForegroundColour,
+		Color as Colour,
+	},
+};
 use crossbeam_channel::RecvTimeoutError;
 use serde::Deserialize;
 use fastrand::Rng;
@@ -64,9 +77,9 @@ struct Song {
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
-			print!(concat!("\r\x1b[4mA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
-			$(print!(" '\x1b[1m{}\x1b[22m'", format!("{}", $why).replace('\n', "\r\n"));)+
-			println!("\x1b[24m\0");
+			print!(concat!("\rA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
+			println!("\0");
 			$($($retaliation)+)?
 		}
 	};
@@ -74,7 +87,14 @@ macro_rules! log {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Print the reset ansi sequence.
-fn exit_sequence() { print!("\r\x1b[0m\0") }
+fn exit_sequence() {
+	print!("\r");
+	if let Err(why) = execute!(stdout(),
+		Show,
+		SetForegroundColour(Colour::Reset),
+	) { log!(err: "reset the terminal style" => why) }
+	print!("\0")
+}
 
 /// Format a text representation of a path into an absolute path.
 ///
@@ -133,27 +153,19 @@ fn main() {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
-				println!("\r\x1b[4mAn error occurred whilst attempting to {message}; '\x1b[1m{reason}\x1b[22m'\x1b[24m\0");
-				exit_sequence()
+				println!("\rAn error occurred whilst attempting to {message}; '{reason}'\0");
+				exit_sequence();
+
 			}
 		)
 	);
 
-	{
-		let default = vec![254, 205, 033];
-		let colours = if let Ok(text) = var("COLOUR") {
-			let inner_colours: Vec<u8> = text
-				.split(|symbol: char| !symbol.is_numeric())
-				.filter_map(|text|
-					text
-						.parse::<u8>()
-						.ok()
-				)
-				.collect();
-			if inner_colours.len() < 3 { default } else { inner_colours }
-		} else { default };
-		print!("\x1b[38;2;{};{};{}m", colours[0], colours[1], colours[2]);
-	}
+	let mut out = stdout();
+	if let Err(why) = execute!(out,
+		Hide,
+		SetForegroundColour(Colour::Yellow),
+	) { log!(err: "set the terminal style" => why) }
+
 
 	let mut lists = {
 		let mut files = args()
@@ -210,7 +222,13 @@ fn main() {
 						while &elapsed <= duration {
 							let paused = playback.is_paused();
 
-							print!("\r[{}][{volume:.3}]:\0", if paused { "Paused " } else { "Playing" });
+							print!("\r[{}][{volume:.3}]\0",
+								{
+									let seconds = elapsed.as_secs();
+									let minutes = seconds / 60;
+									format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
+								}
+							);
 							if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
 
 							let now = Instant::now();
@@ -269,14 +287,16 @@ fn main() {
 			}
 		}
 		map_files(Vec::clear);
-		print!("\r                 \n\n\0");
+		print!("\r");
+		execute!(out, Clear(ClearType::CurrentLine)).expect("clear the current line");
+		print!("\n\n\0");
 	}
 
 	if let Some(inner) = init.into_inner() {
 		inner.notify_exit();
 		inner.clean_up();
-		if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-		exit_sequence()
 	}
+	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+	exit_sequence()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
