@@ -38,9 +38,9 @@ use state::{ State, Signal };
 /// Module for interacting with the file-system.
 mod load;
 
-/// Runtime state struct declaration and implementations.
+/// Runtime state structure declaration and implementations.
 // NOTE: state is not a got name, it was a name i cam up with on a whim.
-// TODO: Rename to more sensical name.
+// TODO: Rename to more sensual name.
 mod state;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
@@ -96,10 +96,16 @@ fn exit_sequence() {
 	print!("\0")
 }
 
+fn clear_sequence() {
+	print!("\r");
+	execute!(out, Clear(ClearType::CurrentLine)).expect("clear the current line");
+	print!("\n\n\0")
+}
+
 /// Format a text representation of a path into an absolute path.
 ///
 /// This recursive function is used for unexpanded shell(zsh based) expressions, on the call site, and inside the playlist file key(?) of songs inside of a playlist.
-/// It can currently only expand environment variables, which might recurse.
+/// It can currently only expand environment variables, which might recurs.
 fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	fn expand(name: &str) -> Result<String, VarError> {
 		let mut buffer = Vec::new();
@@ -235,7 +241,10 @@ fn main() {
 							elapsed += match state.receive_signal(now) {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
-								Ok(Signal::ProgramExit) => break 'queue,
+								Ok(Signal::ProgramExit) => {
+									clear_sequence();
+									break 'queue
+								},
 
 								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack)) => break 'list_playback match signal {
 									Signal::PlaylistNext => list_index += 1,
@@ -287,9 +296,7 @@ fn main() {
 			}
 		}
 		map_files(Vec::clear);
-		print!("\r");
-		execute!(out, Clear(ClearType::CurrentLine)).expect("clear the current line");
-		print!("\n\n\0");
+		clear_sequence()
 	}
 
 	if let Some(inner) = init.into_inner() {
