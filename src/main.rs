@@ -4,11 +4,9 @@
 use std::{
 	panic,
 	cell::OnceCell,
-	fs::File,
-	any::Any,
+	io::Seek,
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
-	io::{ BufReader, Seek },
 	env::{ VarError, var, args },
 };
 use crossterm::terminal::{ enable_raw_mode, disable_raw_mode };
@@ -18,7 +16,7 @@ use fastrand::Rng;
 use load::{
 	FILES,
 	get_file,
-	clear_files,
+	map_files,
 	songs,
 	songlists,
 };
@@ -28,14 +26,20 @@ use state::{ State, Signal };
 mod load;
 
 /// Runtime state struct declaration and implementations.
+// NOTE: state is not a got name, it was a name i cam up with on a whim.
+// TODO: Rename to more sensical name.
 mod state;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
+///
+/// Info:
+///
+/// This constant
 const TICK: Duration = Duration::from_millis(250);
-/// Constant used for rewinding.
-const SECOND: Duration = Duration::from_secs(1);
 
 /// Inter-thread communication channel disconnected.
+///
+/// This is just a default message, that is used when a sender, or receiver, has hung up the between thread connection.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
@@ -73,6 +77,9 @@ macro_rules! log {
 fn exit_sequence() { print!("\r\x1b[0m\0") }
 
 /// Format a text representation of a path into an absolute path.
+///
+/// This recursive function is used for unexpanded shell(zsh based) expressions, on the call site, and inside the playlist file key(?) of songs inside of a playlist.
+/// It can currently only expand environment variables, which might recurse.
 fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	fn expand(name: &str) -> Result<String, VarError> {
 		let mut buffer = Vec::new();
@@ -104,24 +111,20 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
 }
 
-/// Extract the panic payload out of thread err or panics.
-fn panic_payload(payload: &(dyn Any + Send)) -> String {
-	payload
-		.downcast_ref::<&str>()
-		.map(|slice| String::from(*slice))
-		.xor(
-			payload
-				.downcast_ref::<String>()
-				.map(String::from)
-		)
-		.unwrap()
-}
-
 fn main() {
 	panic::set_hook(
 		Box::new(|info|
 			unsafe {
-				let panic = panic_payload(info.payload());
+				let payload = info.payload();
+				let panic = payload
+					.downcast_ref::<&str>()
+					.map(|slice| String::from(*slice))
+					.xor(
+						payload
+							.downcast_ref::<String>()
+							.map(String::from)
+					)
+					.unwrap();
 				let panic = panic
 					.splitn(2, "  ")
 					.collect::<Vec<&str>>();
@@ -164,6 +167,8 @@ fn main() {
 	};
 	let init = OnceCell::new(); // expensive operation only executed if no err.
 	let mut generator = Rng::new();
+	const SECOND: Duration = Duration::from_secs(1);
+
 
 	let length = lists.len();
 	let mut list_index = 0;
@@ -188,11 +193,10 @@ fn main() {
 		let state = init.get_or_init(State::initialise);
 
 
-		let length = song.len();
-		let mut song_index = 0;
-
 		'list_playback: { // i hate this
-			while song_index < length && !state.is_alive() {
+			let length = song.len();
+			let mut song_index = 0;
+			while song_index < length && state.is_alive() {
 				let old_song_index = song_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
 				let (name, duration, song_time) = unsafe { song.get_unchecked_mut(old_song_index) };
@@ -241,7 +245,7 @@ fn main() {
 				*list_time -= 1
 			}
 		}
-		clear_files();
+		map_files(Vec::clear);
 		print!("\r\n\n\0");
 	}
 

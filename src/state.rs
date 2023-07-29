@@ -17,18 +17,23 @@ use crossterm::event::{
 	KeyEvent,
 	KeyCode,
 };
+use std::{
+	fs::File,
+	io::BufReader,
+};
 use super::{
 	TICK,
 	DISCONNECTED,
 	Instant,
-	BufReader,
-	File,
 	RecvTimeoutError,
 	log,
 	disable_raw_mode,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Bundled lazily initialised state.
+/// Bundled lazily initialised values.
+///
+/// The values, that the structure contains, will be initialised if the program successfully loads at least a single playlist.
+/// Generally, this means, that this state type is always contained inside a type that can be uninitialised, e.g: OnceCell, or a mutable Option.
 pub(crate) struct State {
 	output: (OutputStream, OutputStreamHandle),
 	control: JoinHandle<()>,

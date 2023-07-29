@@ -1,9 +1,10 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-use std::fs::read_to_string;
+use std::{
+	io::BufReader,
+	fs::{ File, read_to_string },
+};
 use super::{
 	Duration,
-	BufReader,
-	File,
 	Song,
 	Songlist,
 	log,
@@ -15,12 +16,18 @@ use toml::from_str;
 /// Global audio stream data.
 pub(crate) static mut FILES: Vec<BufReader<File>> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-pub(crate) fn get_file(index: usize) -> &'static mut BufReader<File> {
-	unsafe { FILES.get_unchecked_mut(index) }
+/// Apply a function to the files.
+pub(crate) fn map_files<O>(function: impl FnOnce(&mut Vec<BufReader<File>>) -> O) -> O {
+	unsafe { function(&mut FILES) }
 }
 
-pub(crate) fn clear_files() {
-	unsafe { FILES.clear() }
+/// Get the file at the given index.
+///
+/// Panics:
+///
+/// The function does not panic, but it does not guarrante that the index is inside the bounds of the static.
+pub(crate) fn get_file(index: usize) -> &'static mut BufReader<File> {
+	unsafe { FILES.get_unchecked_mut(index) }
 }
 
 /// Load songs from song metadata and playlist name.
