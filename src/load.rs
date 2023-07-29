@@ -6,7 +6,7 @@ use std::{
 use super::{
 	Duration,
 	Song,
-	Songlist,
+	Playlist,
 	log,
 	fmt_path,
 };
@@ -64,7 +64,7 @@ pub(crate) fn songlists(list_list: impl Iterator<Item = String>) -> Vec<(Box<str
 		.filter_map(|path|
 			{
 				log!(info[path]: "Loading and parsing data from [{path}].");
-				let Songlist { song, name, time } = match read_to_string(fmt_path(&path)).map(|contents| from_str(&contents)) {
+				let Playlist { song, name, time } = match read_to_string(fmt_path(&path)).map(|contents| from_str(&contents)) {
 					Ok(Ok(playlist)) => playlist,
 					Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; None?),
 					Err(why) => log!(err[path]: "load the contents of [{path}]" => why; None?),

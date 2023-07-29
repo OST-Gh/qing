@@ -44,7 +44,7 @@ const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
 /// A playlist with some metadata
-struct Songlist {
+struct Playlist {
 	name: Option<Box<str>>,
 	song: Vec<Song>,
 	time: Option<isize>,
@@ -172,6 +172,8 @@ fn main() {
 
 	let length = lists.len();
 	let mut list_index = 0;
+	let mut volume_of_previous_track = 1.;
+	let mut volume_before_mute = 1.;
 	'queue: while list_index < length {
 		let old_list_index = list_index;
 		let (name, song, list_time) = unsafe { lists.get_unchecked_mut(old_list_index) };
@@ -188,8 +190,6 @@ fn main() {
 		}
 
 		let mut song = songs(&name, &song);
-
-
 		let state = init.get_or_init(State::initialise);
 
 
@@ -203,6 +203,9 @@ fn main() {
 				match state.play_file(get_file(old_song_index)) {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
+
+						playback.set_volume(volume_of_previous_track);
+
 						let mut elapsed = Duration::ZERO;
 						while &elapsed <= duration {
 							let now = Instant::now();
@@ -210,21 +213,39 @@ fn main() {
 							elapsed += match state.receive_signal(now) {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
-								Ok(Signal::ManualExit) => break 'queue,
+								Ok(Signal::ProgramExit) => break 'queue,
 
-								Ok(Signal::SkipNextPlaylist) => {
-									list_index += 1;
-									break 'list_playback
+								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack)) => break 'list_playback match signal {
+									Signal::PlaylistNext => list_index += 1,
+									Signal::PlaylistBack => list_index -= (old_list_index > 0 && elapsed <= SECOND) as usize,
+									_ => unimplemented!()
 								},
-								Ok(Signal::SkipNext) => {
-									song_index += 1;
-									break 'song_playback
-								},
-								Ok(Signal::SkipBackPlaylist) => break 'list_playback list_index -= (old_list_index > 0 && elapsed <= SECOND) as usize,
-								Ok(Signal::SkipBack) => break 'song_playback song_index -= (old_song_index > 0 && elapsed <= SECOND) as usize,
 
-								Ok(Signal::TogglePlayback) => {
+								Ok(signal @ (Signal::SongNext | Signal::SongBack)) => break 'song_playback match signal {
+									Signal::SongNext => song_index += 1,
+									Signal::SongBack => song_index -= (old_song_index > 0 && elapsed <= SECOND) as usize,
+									_ => unimplemented!()
+								},
+
+								Ok(Signal::PlaybackToggle) => {
 									if paused { playback.play() } else { playback.pause() }
+									now.elapsed()
+								},
+
+								Ok(signal @ (Signal::VolumeIncrease | Signal::VolumeDecrease | Signal::VolumeToggle)) => {
+									let mut volume = playback.volume();
+									match signal {
+										Signal::VolumeToggle => if volume <= 0. { volume = volume_before_mute } else {
+											volume_before_mute = volume;
+											volume = 0.
+										},
+										Signal::VolumeIncrease => volume += 0.25,
+										Signal::VolumeDecrease => volume -= 0.25,
+										_ => unimplemented!()
+									}
+									volume = volume.clamp(0., 3.);
+									volume_of_previous_track = volume;
+									playback.set_volume(volume);
 									now.elapsed()
 								},
 

@@ -43,12 +43,15 @@ pub(crate) struct State {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// High level control signal representation
 pub(crate) enum Signal {
-	ManualExit,
-	SkipNextPlaylist,
-	SkipBackPlaylist,
-	SkipNext,
-	SkipBack,
-	TogglePlayback,
+	ProgramExit,
+	PlaylistNext,
+	PlaylistBack,
+	SongNext,
+	SongBack,
+	PlaybackToggle,
+	VolumeToggle,
+	VolumeIncrease,
+	VolumeDecrease,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
@@ -74,14 +77,17 @@ impl State {
 					if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
 						Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. }) => {
-							if let Err(why) = sender.send(Signal::ManualExit) { log!(err: "send a signal to the playback" => why) }
+							if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
 							return
 						},
-						Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::SkipNextPlaylist,
-						Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. }) => Signal::SkipBackPlaylist,
-						Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. }) => Signal::SkipNext,
-						Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. }) => Signal::SkipBack,
-						Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. }) => Signal::TogglePlayback,
+						Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::PlaylistNext,
+						Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. }) => Signal::PlaylistBack,
+						Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. }) => Signal::SongNext,
+						Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. }) => Signal::SongBack,
+						Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. }) => Signal::PlaybackToggle,
+						Event::Key(KeyEvent { code: KeyCode::Char('m' | 'M'), .. }) => Signal::VolumeToggle,
+						Event::Key(KeyEvent { code: KeyCode::Up             , .. }) => Signal::VolumeIncrease,
+						Event::Key(KeyEvent { code: KeyCode::Down           , .. }) => Signal::VolumeDecrease,
 						_ => continue,
 					};
 					if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
