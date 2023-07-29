@@ -5,7 +5,7 @@ use std::{
 };
 use super::{
 	Duration,
-	Song,
+	Track,
 	Playlist,
 	log,
 	fmt_path,
@@ -31,11 +31,11 @@ pub(crate) fn get_file(index: usize) -> &'static mut BufReader<File> {
 }
 
 /// Load songs from song metadata and playlist name.
-pub(crate) fn songs(name: &str, play_list: &[Song]) -> Vec<(Box<str>, Duration, isize)> {
+pub(crate) fn tracks(name: &str, play_list: &[Track]) -> Vec<(Box<str>, Duration, isize)> {
 	log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 	let result = play_list
 		.iter()
-		.filter_map(|Song { name, file, time }|
+		.filter_map(|Track { name, file, time }|
 			{
 				let name = name
 					.clone()
@@ -59,7 +59,7 @@ pub(crate) fn songs(name: &str, play_list: &[Song]) -> Vec<(Box<str>, Duration, 
 }
 
 /// Load playlists from paths.
-pub(crate) fn songlists(list_list: impl Iterator<Item = String>) -> Vec<(Box<str>, Vec<Song>, isize)>  {
+pub(crate) fn playlists(list_list: impl Iterator<Item = String>) -> Vec<(Box<str>, Vec<Track>, isize)>  {
 	let result = list_list
 		.filter_map(|path|
 			{

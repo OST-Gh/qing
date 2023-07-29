@@ -11,10 +11,8 @@ use std::{
 };
 use crossterm::{
 	execute,
-	cursor::{ Show, Hide },
+	cursor::Hide,
 	terminal::{
-		Clear,
-		ClearType,
 		enable_raw_mode,
 		disable_raw_mode
 	},
@@ -30,10 +28,11 @@ use load::{
 	FILES,
 	get_file,
 	map_files,
-	songs,
-	songlists,
+	tracks,
+	playlists,
 };
 use state::{ State, Signal };
+use echo::{ exit, clear };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Module for interacting with the file-system.
 mod load;
@@ -42,6 +41,9 @@ mod load;
 // NOTE: state is not a got name, it was a name i cam up with on a whim.
 // TODO: Rename to more sensual name.
 mod state;
+
+/// A collection of functions that are used repeatedly to display certain sequences.
+mod echo;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
 ///
@@ -59,14 +61,14 @@ const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 /// A playlist with some metadata
 struct Playlist {
 	name: Option<Box<str>>,
-	song: Vec<Song>,
+	song: Vec<Track>,
 	time: Option<isize>,
 }
 
 #[derive(Deserialize)]
 #[derive(Clone)]
 /// A song path with aditional metadata
-struct Song {
+struct Track {
 	name: Option<Box<str>>,
 	file: Box<str>,
 	time: Option<isize>,
@@ -86,22 +88,6 @@ macro_rules! log {
 	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Print the reset ansi sequence.
-fn exit_sequence() {
-	print!("\r");
-	if let Err(why) = execute!(stdout(),
-		Show,
-		SetForegroundColour(Colour::Reset),
-	) { log!(err: "reset the terminal style" => why) }
-	print!("\0")
-}
-
-fn clear_sequence() {
-	print!("\r");
-	execute!(out, Clear(ClearType::CurrentLine)).expect("clear the current line");
-	print!("\n\n\0")
-}
-
 /// Format a text representation of a path into an absolute path.
 ///
 /// This recursive function is used for unexpanded shell(zsh based) expressions, on the call site, and inside the playlist file key(?) of songs inside of a playlist.
@@ -160,7 +146,7 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				println!("\rAn error occurred whilst attempting to {message}; '{reason}'\0");
-				exit_sequence();
+				exit();
 
 			}
 		)
@@ -179,9 +165,9 @@ fn main() {
 			.peekable();
 		if let None = files.peek() { panic!("get the program arguments  no arguments given") }
 
-		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit_sequence()) }
+		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit()) }
 
-		songlists(files)
+		playlists(files)
 	};
 	let init = OnceCell::new(); // expensive operation only executed if no err.
 	let mut generator = Rng::new();
@@ -191,34 +177,34 @@ fn main() {
 	let mut volume = 1.;
 	let mut volume_before_mute = 1.;
 
-	let length = lists.len();
-	let mut list_index = 0;
-	'queue: while list_index < length {
-		let old_list_index = list_index;
-		let (name, song, list_time) = unsafe { lists.get_unchecked_mut(old_list_index) };
+	let lists_length = lists.len();
+	let mut lists_index = 0;
+	'queue: while lists_index < lists_length {
+		let old_lists_index = lists_index;
+		let (name, songs, list_repeats) = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
-		let length = song.len();
+		let length = songs.len();
 		for value in 0..length {
 			let index = value % length;
-			song.swap(index, generator.usize(0..=index));
-			song.swap(index, generator.usize(index..length));
+			songs.swap(index, generator.usize(0..=index));
+			songs.swap(index, generator.usize(index..length));
 			// a b c; b inclusive in both random ranges
 			// b a c
 			// b c a
 		}
 
-		let mut song = songs(&name, &song);
+		let mut songs = tracks(&name, &songs);
 		let state = init.get_or_init(State::initialise);
 
 		'list_playback: { // i hate this
-			let length = song.len();
-			let mut song_index = 0;
-			while song_index < length && state.is_alive() {
-				let old_song_index = song_index; // (sort of) proxy to index (used because of rewind code)
+			let songs_length = songs.len();
+			let mut songs_index = 0;
+			while songs_index < songs_length && state.is_alive() {
+				let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
-				let (name, duration, song_time) = unsafe { song.get_unchecked_mut(old_song_index) };
-				match state.play_file(get_file(old_song_index)) {
+				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
+				match state.play_file(get_file(old_songs_index)) {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 
@@ -242,20 +228,19 @@ fn main() {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
 								Ok(Signal::ProgramExit) => {
-									clear_sequence();
+									clear();
 									break 'queue
 								},
 
-								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack)) => break 'list_playback match signal {
-									Signal::PlaylistNext => list_index += 1,
-									Signal::PlaylistBack => list_index -= (old_list_index > 0 && elapsed <= SECOND) as usize,
-									_ => unimplemented!()
-								},
-
-								Ok(signal @ (Signal::SongNext | Signal::SongBack)) => break 'song_playback match signal {
-									Signal::SongNext => song_index += 1,
-									Signal::SongBack => song_index -= (old_song_index > 0 && elapsed <= SECOND) as usize,
-									_ => unimplemented!()
+								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::SongNext | Signal::SongBack)) => {
+									let is_under_threshold = elapsed <= SECOND;
+									match signal {
+										Signal::PlaylistNext => break 'list_playback lists_index += 1,
+										Signal::PlaylistBack => break 'list_playback lists_index -= (old_lists_index > 0 && is_under_threshold) as usize,
+										Signal::SongNext => break 'song_playback songs_index += 1,
+										Signal::SongBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
+										_ => unimplemented!()
+									}
 								},
 
 								Ok(Signal::PlaybackToggle) => {
@@ -281,16 +266,16 @@ fn main() {
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 							};
 						}
-						if *song_time == 0 { song_index += 1 } else { *song_time -= 1 }
+						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				};
-				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_song_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
+				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
-			if *list_time == 0 { list_index += 1 } else { *list_time -= 1 }
+			if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
 		}
 		map_files(Vec::clear);
-		clear_sequence()
+		clear()
 	}
 
 	if let Some(inner) = init.into_inner() {
@@ -298,6 +283,6 @@ fn main() {
 		inner.clean_up();
 	}
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
-	exit_sequence()
+	exit()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
