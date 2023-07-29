@@ -281,19 +281,13 @@ fn main() {
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 							};
 						}
-						if *song_time == 0 { song_index += 1 } else {
-							log!(info[name]: "Repeating the song [{name}]");
-							*song_time -= 1
-						}
+						if *song_time == 0 { song_index += 1 } else { *song_time -= 1 }
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				};
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_song_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
-			if *list_time == 0 { list_index += 1 } else {
-				log!(info[name]: "Reloading the playlist [{name}]");
-				*list_time -= 1
-			}
+			if *list_time == 0 { list_index += 1 } else { *list_time -= 1 }
 		}
 		map_files(Vec::clear);
 		clear_sequence()
