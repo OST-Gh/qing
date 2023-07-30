@@ -1,32 +1,12 @@
 done = []
 
 [[todo]]
-name = "Add Spotify Support"
-group = "global"
-
-[[todo]]
-name = "Optimize Idle-Wake-Ups on MacOS"
-group = "global"
-
-[[todo]]
 name = "Deccrease memory footprint if even possible"
 group = "global"
 
 [[todo]]
 name = "Search for bugs"
 group = "global"
-
-[[todo]]
-name = "make a better no-args message with proper formatting and colour"
-group = "global"
-
-[[todo]]
-name = "update README"
-group = "global"
-
-[[todo]]
-name = "make quer (playlist composer)"
-group = "quer"
 
 [[todo]]
 name = "add is_terminal checks in without creating multiple functions nor if checks in the log macro"
