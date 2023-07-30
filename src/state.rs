@@ -124,6 +124,9 @@ impl State {
 		{
 			let why = why
 				.downcast_ref::<String>()
+				.unwrap()
+				.split("  ")
+				.nth(1)
 				.unwrap();
 			log!(err: "clean up the playback control thread" => why)
 		}
