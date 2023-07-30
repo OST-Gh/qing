@@ -21,15 +21,15 @@ time = -1 # similar to playlist-level time, but for a single song.
 ## Controls:
 - #### quing supports simple playback controls (pausing and skipping)
 ```toml
-'c'    = "exit the program when in active playback"
-'n'    = "skip one playlist forwards"
-'b'    = "skip one playlist backwards"
-'l'    = "skip one track forwards"
-'j'    = "skip one track backwards"
-'k'    = "toggle the playback"
-'m'    = "Toggle the volume of the currently playing track"
-'up'   = "Increase the volume of the currently playing track"
-'down' = "Decrease the volume of the currently playing track"
+'ctrl + c' = "exit the program when in active playback"
+'ctrl + l' = "skip one playlist forwards"
+'ctrl + j' = "skip one playlist backwards"
+'l' = "skip one track forwards"
+'j' = "skip one track backwards"
+'k' = "toggle the playback"
+'shift  + k' = "Toggle the volume of the currently playing track"
+'shift  + l' = "Increase the volume of the currently playing track"
+'shift + j' = "Decrease the volume of the currently playing track"
 ```
 
 ###### NOTE: all inputted playlists are loaded upon starting.

@@ -232,13 +232,13 @@ fn main() {
 									break 'queue
 								},
 
-								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::SongNext | Signal::SongBack)) => {
+								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::TrackNext | Signal::TrackBack)) => {
 									let is_under_threshold = elapsed <= SECOND;
 									match signal {
 										Signal::PlaylistNext => break 'list_playback lists_index += 1,
 										Signal::PlaylistBack => break 'list_playback lists_index -= (old_lists_index > 0 && is_under_threshold) as usize,
-										Signal::SongNext => break 'song_playback songs_index += 1,
-										Signal::SongBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
+										Signal::TrackNext => break 'song_playback songs_index += 1,
+										Signal::TrackBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
 										_ => unimplemented!()
 									}
 								},

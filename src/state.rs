@@ -15,6 +15,7 @@ use crossterm::event::{
 	Event,
 	KeyEvent,
 	KeyCode,
+	KeyModifiers,
 };
 use std::{
 	fs::File,
@@ -46,8 +47,8 @@ pub(crate) enum Signal {
 	ProgramExit,
 	PlaylistNext,
 	PlaylistBack,
-	SongNext,
-	SongBack,
+	TrackNext,
+	TrackBack,
 	PlaybackToggle,
 	VolumeToggle,
 	VolumeIncrease,
@@ -76,19 +77,30 @@ impl State {
 				while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
 					if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-						Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), .. }) => {
-							if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
-							return
-						},
-						Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::PlaylistNext,
-						Event::Key(KeyEvent { code: KeyCode::Char('b' | 'B'), .. }) => Signal::PlaylistBack,
-						Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), .. }) => Signal::SongNext,
-						Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), .. }) => Signal::SongBack,
-						Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), .. }) => Signal::PlaybackToggle,
-						Event::Key(KeyEvent { code: KeyCode::Char('m' | 'M'), .. }) => Signal::VolumeToggle,
-						Event::Key(KeyEvent { code: KeyCode::Up             , .. }) => Signal::VolumeIncrease,
-						Event::Key(KeyEvent { code: KeyCode::Down           , .. }) => Signal::VolumeDecrease,
-						_ => continue,
+						Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => match code {
+							'c' | 'C' if modifiers.contains(KeyModifiers::CONTROL) => {
+								if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
+								return
+							},
+
+							'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+							'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+
+							'l' => Signal::TrackNext,
+							'j' => Signal::TrackBack,
+
+							'L' => Signal::VolumeIncrease,
+							'J' => Signal::VolumeDecrease,
+
+							'k' => Signal::PlaybackToggle,
+							'K' => Signal::VolumeToggle,
+
+							_ => continue,
+						}
+						event => {
+							#[cfg(debug_assertions)] println!("\r{event:?}\0");
+							continue
+						}
 					};
 					if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 				}
