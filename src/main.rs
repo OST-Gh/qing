@@ -81,11 +81,11 @@ macro_rules! log {
 		{
 			print!(concat!("\rA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
-			println!("\0");
+			print!("\0\n");
 			$($($retaliation)+)?
 		}
 	};
-	(info$([$($visible: ident)+])?: $message: literal) => { println!(concat!('\r', $message, '\0') $(, $($visible = $visible),+)?) };
+	(info$([$($visible: ident)+])?: $message: literal) => { print!(concat!('\r', $message, "\0\n") $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
@@ -145,7 +145,7 @@ fn main() {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
-				println!("\rAn error occurred whilst attempting to {message}; '{reason}'\0");
+				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\0\n");
 				exit();
 
 			}

@@ -98,7 +98,7 @@ impl State {
 							_ => continue,
 						}
 						event => {
-							#[cfg(debug_assertions)] println!("\r{event:?}\0");
+							#[cfg(debug_assertions)] print!("\r{event:?}\0\n");
 							continue
 						}
 					};
@@ -107,6 +107,7 @@ impl State {
 			)
 			.unwrap_or_else(|why| panic!("create the playback control thread  {why}"));
 
+		print!("\n\r\0");
 		Self {
 			sound_out,
 			control_thread,
