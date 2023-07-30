@@ -19,7 +19,7 @@ use crossterm::event::{
 };
 use std::{
 	fs::File,
-	io::{ BufReader, IsTerminal },
+	io::BufReader,
 	thread::{ Builder, JoinHandle },
 };
 use super::{
@@ -29,7 +29,6 @@ use super::{
 	RecvTimeoutError,
 	log,
 	disable_raw_mode,
-	stdout,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Bundled lazily initialised values.
@@ -73,7 +72,7 @@ impl State {
 
 		let (sender, signal) = unbounded();
 		let (exit, exit_receiver) = unbounded();
-		let control_thread = if stdout().is_terminal() {
+		let control_thread = if event::poll(TICK).is_ok() {
 			log!(info: "Spinning up the playback control thread.");
 			Builder::new()
 				.name(String::from("Playback-Control"))
@@ -110,7 +109,7 @@ impl State {
 				.map_err(|why| log!(err: "create the playback control thread" => why))
 				.ok()
 		} else { None };
-		if control_thread.is_some() { log!(info: "Starting in headless mode.") }
+		if control_thread.is_none() { log!(info: "Starting in headless mode.") }
 
 		print!("\n\r\0");
 		Self {
