@@ -1,4 +1,4 @@
-# quing, a (hopefully) minimalist toml based song shuffler
+# quing, a (hopefully) minimalist toml based music player
 
 ## Usage: quing [playlist.toml...]
 ```toml
@@ -32,5 +32,4 @@ time = -1 # similar to playlist-level time, but for a single song.
 'shift_k' = "Toggle the volume of the currently playing track"
 ```
 
-###### NOTE: all inputted playlists are loaded upon starting.
-###### NOTE: all files of the playlist are loaded when it is its turn to play.
+###### NOTE: all inputted playlists are loaded upon starting. all files of the playlist are loaded when it is its turn to play. the program will run in headless mode if the creation of the playback control thread fails.

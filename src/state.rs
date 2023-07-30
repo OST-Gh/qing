@@ -19,7 +19,7 @@ use crossterm::event::{
 };
 use std::{
 	fs::File,
-	io::BufReader,
+	io::{ BufReader, IsTerminal },
 	thread::{ Builder, JoinHandle },
 };
 use super::{
@@ -29,6 +29,7 @@ use super::{
 	RecvTimeoutError,
 	log,
 	disable_raw_mode,
+	stdout,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Bundled lazily initialised values.
@@ -37,7 +38,7 @@ use super::{
 /// Generally, this means, that this state type is always contained inside a type that can be uninitialised, e.g: OnceCell, or a mutable Option.
 pub(crate) struct State {
 	sound_out: (OutputStream, OutputStreamHandle),
-	control_thread: JoinHandle<()>,
+	control_thread: Option<JoinHandle<()>>, // if None, use headless
 	exit: Sender<u8>,
 	signal: Receiver<Signal>,
 }
@@ -70,42 +71,46 @@ impl State {
 			);
 
 
-		log!(info: "Spinning up the playback control thread.");
 		let (sender, signal) = unbounded();
 		let (exit, exit_receiver) = unbounded();
-		let control_thread = Builder::new()
-			.name(String::from("Playback-Control"))
-			.spawn(move ||
-				while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-					if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-						Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => match code {
-							'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-							'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-							'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-								if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
-								return
-							},
+		let control_thread = if stdout().is_terminal() {
+			log!(info: "Spinning up the playback control thread.");
+			Builder::new()
+				.name(String::from("Playback-Control"))
+				.spawn(move ||
+					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
+						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => match code {
+								'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+								'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+								'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
+									if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
+									return
+								},
 
-							'l' => Signal::TrackNext,
-							'j' => Signal::TrackBack,
-							'k' => Signal::PlaybackToggle,
+								'l' => Signal::TrackNext,
+								'j' => Signal::TrackBack,
+								'k' => Signal::PlaybackToggle,
 
-							'L' => Signal::VolumeIncrease,
-							'J' => Signal::VolumeDecrease,
-							'K' => Signal::VolumeToggle,
+								'L' => Signal::VolumeIncrease,
+								'J' => Signal::VolumeDecrease,
+								'K' => Signal::VolumeToggle,
 
-							_ => continue,
-						}
-						event => {
-							#[cfg(debug_assertions)] print!("\r{event:?}\0\n");
-							continue
-						}
-					};
-					if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
-				}
-			)
-			.unwrap_or_else(|why| panic!("create the playback control thread  {why}"));
+								_ => continue,
+							}
+							#[allow(unused_variables)] event => {
+								#[cfg(debug_assertions)] print!("\r{event:?}\0\n");
+								continue
+							}
+						};
+						if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+					}
+				)
+				.map_err(|why| log!(err: "create the playback control thread" => why))
+				.ok()
+		} else { None };
+		if control_thread.is_some() { log!(info: "Starting in headless mode.") }
 
 		print!("\n\r\0");
 		Self {
@@ -118,18 +123,9 @@ impl State {
 
 	/// Clean-up the state.
 	pub(crate) fn clean_up(self) {
-		if let Err(why) = self
+		let _ = self
 			.control_thread
-			.join()
-		{
-			let why = why
-				.downcast_ref::<String>()
-				.unwrap()
-				.split("  ")
-				.nth(1)
-				.unwrap();
-			log!(err: "clean up the playback control thread" => why)
-		}
+			.map(JoinHandle::join);
 	}
 
 	/// Notify the playback control thread to exit if it hasn't already.
@@ -139,11 +135,11 @@ impl State {
 			.send(0);
 	}
 
-	/// Check wether or not the playback control thread is still running.
-	pub(crate) fn is_alive(&self) -> bool {
-		!self
+	/// Check wether the control thread exists or not.
+	pub(crate) fn is_headless(&self) -> bool {
+		self
 			.control_thread
-			.is_finished()
+			.is_none()
 	}
 
 	/// Play a single file.

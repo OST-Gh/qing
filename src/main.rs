@@ -182,6 +182,8 @@ fn main() {
 	'queue: while lists_index < lists_length {
 		let old_lists_index = lists_index;
 		let (name, songs, list_repeats) = unsafe { lists.get_unchecked_mut(old_lists_index) };
+		if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
+
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		let length = songs.len();
@@ -200,13 +202,17 @@ fn main() {
 		'list_playback: { // i hate this
 			let songs_length = songs.len();
 			let mut songs_index = 0;
-			while songs_index < songs_length && state.is_alive() {
+			while songs_index < songs_length {
 				let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
 				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
+				if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
+
+
 				match state.play_file(get_file(old_songs_index)) {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
+						if state.is_headless() { break 'song_playback playback.sleep_until_end() }
 
 						playback.set_volume(volume);
 
@@ -266,13 +272,11 @@ fn main() {
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
 							};
 						}
-						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				};
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
-			if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
 		}
 		map_files(Vec::clear);
 		clear()
