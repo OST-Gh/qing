@@ -232,6 +232,11 @@ fn main() {
 									break 'queue
 								},
 
+								Ok(Signal::PlaybackToggle) => {
+									if paused { playback.play() } else { playback.pause() }
+									now.elapsed()
+								},
+
 								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::TrackNext | Signal::TrackBack)) => {
 									let is_under_threshold = elapsed <= SECOND;
 									match signal {
@@ -241,11 +246,6 @@ fn main() {
 										Signal::TrackBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
 										_ => unimplemented!()
 									}
-								},
-
-								Ok(Signal::PlaybackToggle) => {
-									if paused { playback.play() } else { playback.pause() }
-									now.elapsed()
 								},
 
 								Ok(signal @ (Signal::VolumeIncrease | Signal::VolumeDecrease | Signal::VolumeToggle)) => {

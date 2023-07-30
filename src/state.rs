@@ -44,15 +44,17 @@ pub(crate) struct State {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// High level control signal representation
 pub(crate) enum Signal {
-	ProgramExit,
 	PlaylistNext,
 	PlaylistBack,
+	ProgramExit,
+
 	TrackNext,
 	TrackBack,
 	PlaybackToggle,
-	VolumeToggle,
+
 	VolumeIncrease,
 	VolumeDecrease,
+	VolumeToggle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
@@ -78,21 +80,19 @@ impl State {
 					if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 					let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
 						Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => match code {
-							'c' | 'C' if modifiers.contains(KeyModifiers::CONTROL) => {
+							'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+							'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+							'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
 								if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
 								return
 							},
 
-							'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-							'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-
 							'l' => Signal::TrackNext,
 							'j' => Signal::TrackBack,
+							'k' => Signal::PlaybackToggle,
 
 							'L' => Signal::VolumeIncrease,
 							'J' => Signal::VolumeDecrease,
-
-							'k' => Signal::PlaybackToggle,
 							'K' => Signal::VolumeToggle,
 
 							_ => continue,
