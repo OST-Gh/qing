@@ -267,7 +267,7 @@ fn main() {
 								},
 
 								Err(RecvTimeoutError::Disconnected) => {
-									log!(err: "receive a message from the playback control thread" => DISCONNECTED);
+									log!(err: "receive a signal from the playback control thread" => DISCONNECTED);
 									log!(info: "Exiting the program."); 
 									break 'queue
 								}, // chain reaction will follow
