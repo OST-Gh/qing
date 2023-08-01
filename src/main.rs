@@ -182,7 +182,6 @@ fn main() {
 	'queue: while lists_index < lists_length {
 		let old_lists_index = lists_index;
 		let (name, songs, list_repeats) = unsafe { lists.get_unchecked_mut(old_lists_index) };
-		if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
 
 
 		log!(info[name]: "Shuffling all of the songs in [{name}].");
@@ -206,7 +205,6 @@ fn main() {
 				let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
 				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
-				if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 
 
 				match state.play_file(get_file(old_songs_index)) {
@@ -217,10 +215,10 @@ fn main() {
 						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
-						while &elapsed <= duration {
+						while &elapsed <= duration && state.is_alive() {
 							let paused = playback.is_paused();
 
-							print!("\r[{}][{volume:.3}]\0",
+							print!("\r[{}][{volume:.2}]\0",
 								{
 									let seconds = elapsed.as_secs();
 									let minutes = seconds / 60;
@@ -270,14 +268,16 @@ fn main() {
 								},
 
 								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
-							};
+							}
 						}
+						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
 					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
-				};
+				}
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
 		}
+		if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
 		map_files(Vec::clear);
 		clear()
 	}

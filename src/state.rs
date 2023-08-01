@@ -43,6 +43,7 @@ pub(crate) struct State {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// High level control signal representation
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub(crate) enum Signal {
 	PlaylistNext,
 	PlaylistBack,
@@ -141,6 +142,12 @@ impl State {
 			.is_none()
 	}
 
+	/// Check if the thread exists, and is running
+	pub(crate) fn is_alive(&self) -> bool {
+		let Some(ref handle) = self.control_thread else { return false };
+		!handle.is_finished()
+	}
+
 	/// Play a single file.
 	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
 		self
@@ -154,6 +161,7 @@ impl State {
 		self
 			.signal
 			.recv_deadline(moment + TICK)
+			// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\0\n") }) // commented out because unstable ffs
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
