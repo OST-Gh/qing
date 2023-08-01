@@ -141,13 +141,6 @@ impl State {
 			.control_thread
 			.is_none()
 	}
-
-	/// Check if the thread exists, and is running
-	pub(crate) fn is_alive(&self) -> bool {
-		let Some(ref handle) = self.control_thread else { return false };
-		!handle.is_finished()
-	}
-
 	/// Play a single file.
 	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
 		self

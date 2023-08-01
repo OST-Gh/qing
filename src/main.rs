@@ -211,11 +211,10 @@ fn main() {
 					Ok(playback) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 						if state.is_headless() { break 'song_playback playback.sleep_until_end() }
-
 						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
-						while &elapsed <= duration && state.is_alive() {
+						while &elapsed <= duration {
 							let paused = playback.is_paused();
 
 							print!("\r[{}][{volume:.2}]\0",
@@ -267,7 +266,11 @@ fn main() {
 									now.elapsed()
 								},
 
-								Err(RecvTimeoutError::Disconnected) => break 'queue, // chain reaction will follow
+								Err(RecvTimeoutError::Disconnected) => {
+									log!(err: "receive a message from the playback control thread" => DISCONNECTED);
+									log!(info: "Exiting the program."); 
+									break 'queue
+								}, // chain reaction will follow
 							}
 						}
 						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
