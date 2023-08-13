@@ -18,7 +18,6 @@ time = -1 # similar to playlist-level time, but for a single song.
 
 ## Flags:
 ##### Use '-h,' as the first argument, to enter headless mode manually
-##### NOTE: if headless is set, the program won't respond to any inputs, so one is required to exit the program by somehow manually terminating it. (e.g.: pkill quing)
 
 ## Controls:
 ```toml

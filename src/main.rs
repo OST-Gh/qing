@@ -154,11 +154,6 @@ fn main() {
 	);
 
 	let mut out = stdout();
-	if let Err(why) = execute!(out,
-		Hide,
-		SetForegroundColour(Colour::Yellow),
-	) { log!(err: "set the terminal style" => why) }
-
 
 	let headless_flag_set: bool;
 	let mut lists = {
@@ -171,8 +166,12 @@ fn main() {
 		headless_flag_set = is_present;
 		if is_present { files.next(); } 
 
-		if headless_flag_set {
+		if !headless_flag_set {
 			if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit()) }
+			if let Err(why) = execute!(out,
+				Hide,
+				SetForegroundColour(Colour::Yellow),
+			) { log!(err: "set the terminal style" => why) }
 		}
 
 		playlists(files)
@@ -304,7 +303,9 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
-	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+	if !headless_flag_set {
+		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
+	}
 	exit()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
