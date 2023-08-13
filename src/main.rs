@@ -106,10 +106,11 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	PathBuf::from(
 		path
 			.split(MAIN_SEPARATOR_STR)
-			.filter_map(|part|
+			.enumerate()
+			.filter_map(|(index, part)|
 				match match part {
-					"~" => expand("HOME"),
-					_ if part.starts_with('$') => expand(&part[1..]), // add support for multiple $ vars ($$VAR => $VALUE_OF_VAR => VALUE_OF_VALUE_OF_VAR)
+					"~" if index == 0 => expand("HOME"),
+					_ if part.starts_with('$') => expand(&part[1..]),
 					_ => return Some(String::from(part)),
 				} {
 					Ok(part) => Some(part),

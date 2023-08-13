@@ -3,23 +3,21 @@
 ## Usage: quing [playlist.toml...]
 ```toml
 name = "" # optional name of the playlist
-time = -1 # optional setting for repeating a playlist n times. if the number is below zero, it'll repeat infinitely
+time = -1 # an optional setting for repeating a playlist n times. if the number is below zero, it'll repeat infinitely
 
 [[song]]
-name = "" # same as playlist-level name, for a song.
-file = "" # file path pointing towards a file which contains audio data.
+name = "" # same as playlist-level name, though for a song.
+file = "" # file path pointing towards a file, which contains audio data.
 # supported features:
 #  environment variables: ${NAME}
-#  NOTE: redcursive variables also work: $${NAME} => ${VALUE_OF_NAME} => {VALUE_OF_VALUE_OF_NAME}
-#  ~ as a shortcut for $HOME
-#
-# NOTE: it isn't suggested to use relative paths, for files.
+#  NOTE: redcursive variables do also work e.g.: $${NAME} => ${VALUE_OF_NAME} => {VALUE_OF_VALUE_OF_NAME}
+#  ~, at the start of the path, as a shortcut, for $HOME.
 
 time = -1 # similar to playlist-level time, but for a single song.
 ```
 
 ## Controls:
-- #### quing supports simple playback controls (pausing and skipping)
+- #### quing supports simple playback controls
 ```toml
 ' ctrl_l' = "skip one playlist forwards"
 ' ctrl_j' = "skip one playlist backwards"
