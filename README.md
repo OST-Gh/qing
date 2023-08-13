@@ -16,8 +16,11 @@ file = "" # file path pointing towards a file, which contains audio data.
 time = -1 # similar to playlist-level time, but for a single song.
 ```
 
+## Flags:
+##### Use '-h,' as the first argument, to enter headless mode manually
+##### NOTE: if headless is set, the program won't respond to any inputs, so one is required to exit the program by somehow manually terminating it. (e.g.: pkill quing)
+
 ## Controls:
-- #### quing supports simple playback controls
 ```toml
 ' ctrl_l' = "skip one playlist forwards"
 ' ctrl_j' = "skip one playlist backwards"

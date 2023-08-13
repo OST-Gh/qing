@@ -37,10 +37,16 @@ use super::{
 /// Generally, this means, that this state type is always contained inside a type that can be uninitialised, e.g: OnceCell, or a mutable Option.
 pub(crate) struct State {
 	sound_out: (OutputStream, OutputStreamHandle),
-	control_thread: Option<JoinHandle<()>>, // if None, use headless
-	exit: Sender<u8>,
-	signal: Receiver<Signal>,
+	controls: Option<Controls>,
 }
+
+/// Controls
+pub(crate) struct Controls {
+	control_thread: JoinHandle<()>,
+	exit_notifier: Sender<()>,
+	signal_receiver: Receiver<Signal>,
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// High level control signal representation
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -59,23 +65,28 @@ pub(crate) enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl State {
-	/// Initialize state.
-	pub(crate) fn initialise() -> Self {
+	fn output_device() -> (OutputStream, OutputStreamHandle) {
 		log!(info: "Determining the output device.");
-		let sound_out = rodio::OutputStream::try_default()
+		rodio::OutputStream::try_default()
 			.unwrap_or_else(|why|
 				{
 					if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 					panic!("determine the default audio output device  {why}")
 				}
-			);
+			)
+	}
 
+	/// Initialize state.
+	pub(crate) fn new() -> Self {
+		let sound_out = Self::output_device();
 
-		let (sender, signal) = unbounded();
-		let (exit, exit_receiver) = unbounded();
-		let control_thread = if event::poll(TICK).is_ok() {
+		let (signal_sender, signal_receiver) = unbounded();
+		let (exit_notifier, exit_receiver) = unbounded();
+		let controls = 'controls: {
+			let Ok(_) = event::poll(TICK) else { break 'controls None };
+
 			log!(info: "Spinning up the playback control thread.");
-			Builder::new()
+			let Ok(control_thread) = Builder::new()
 				.name(String::from("Playback-Control"))
 				.spawn(move ||
 					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
@@ -85,7 +96,7 @@ impl State {
 								'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
 								'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
 								'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-									if let Err(why) = sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
+									if let Err(why) = signal_sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
 									return
 								},
 
@@ -104,43 +115,43 @@ impl State {
 								continue
 							}
 						};
-						if let Err(_) = sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 					}
 				)
-				.map_err(|why| log!(err: "create the playback control thread" => why))
-				.ok()
-		} else { None };
-		if control_thread.is_none() { log!(info: "Starting in headless mode.") }
+				.map_err(|why| log!(err: "create the playback control thread" => why)) else { break 'controls None };
+
+			Some(Controls { control_thread, exit_notifier, signal_receiver })
+		};
+		if controls.is_none() { log!(info: "Starting in headless mode.") }
 
 		print!("\n\r\0");
 		Self {
 			sound_out,
-			control_thread,
-			exit,
-			signal,
+			controls,
 		}
 	}
 
-	/// Clean-up the state.
-	pub(crate) fn clean_up(self) {
-		let _ = self
-			.control_thread
-			.map(JoinHandle::join);
+	/// Initialise without a head.
+	pub(crate) fn headless() -> Self {
+		Self {
+			sound_out: Self::output_device(),
+			controls: None,
+		}
 	}
 
-	/// Notify the playback control thread to exit if it hasn't already.
-	pub(crate) fn notify_exit(&self) {
-		let _ = self
-			.exit
-			.send(0);
-	}
-
-	/// Check wether the control thread exists or not.
-	pub(crate) fn is_headless(&self) -> bool {
+	/// Get a reference to the underlying control structure.
+	pub(crate) fn get_controls(&self) -> Option<&Controls> {
 		self
-			.control_thread
-			.is_none()
+			.controls
+			.as_ref()
 	}
+
+	/// Take the underlying controls.
+	pub(crate) fn take_controls(self) -> Option<Controls> {
+		self
+			.controls
+	}
+
 	/// Play a single file.
 	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
 		self
@@ -148,13 +159,30 @@ impl State {
 			.1
 			.play_once(song)
 	}
+}
+
+impl Controls {
+	/// Clean-up the state.
+	pub(crate) fn clean_up(self) {
+		let _ = self
+			.control_thread
+			.join();
+	}
+
+
+	/// Notify the playback control thread to exit if it hasn't already.
+	pub(crate) fn notify_exit(&self) {
+		let _ = self
+			.exit_notifier
+			.send(());
+	}
 
 	/// Try to receive a signal by waiting for it for a set amount of time.
 	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
 		self
-			.signal
+			.signal_receiver
 			.recv_deadline(moment + TICK)
-			// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\0\n") }) // commented out because unstable interface
+		// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\0\n") }) // commented out because unstable interface
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

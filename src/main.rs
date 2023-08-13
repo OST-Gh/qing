@@ -160,13 +160,20 @@ fn main() {
 	) { log!(err: "set the terminal style" => why) }
 
 
+	let headless_flag_set: bool;
 	let mut lists = {
 		let mut files = args()
 			.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 			.peekable();
-		if let None = files.peek() { panic!("get the program arguments  no arguments given") }
 
-		if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit()) }
+		let Some(next_up) = files.peek() else { panic!("get the program arguments  no arguments given") };
+		let is_present = next_up == "-h";
+		headless_flag_set = is_present;
+		if is_present { files.next(); } 
+
+		if headless_flag_set {
+			if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit()) }
+		}
 
 		playlists(files)
 	};
@@ -197,7 +204,8 @@ fn main() {
 		}
 
 		let mut songs = tracks(&name, &songs);
-		let state = init.get_or_init(State::initialise);
+		let state = init.get_or_init(|| if headless_flag_set { State::headless() } else { State::new() });
+		let controls = state.get_controls();
 
 		'list_playback: { // i hate this
 			let songs_length = songs.len();
@@ -208,10 +216,11 @@ fn main() {
 				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
 
 
-				match state.play_file(get_file(old_songs_index)) {
-					Ok(playback) => 'song_playback: {
+				match (state.play_file(get_file(old_songs_index)), controls) {
+					(Ok(playback), None) => playback.sleep_until_end(),
+
+					(Ok(playback), Some(controls)) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
-						if state.is_headless() { break 'song_playback playback.sleep_until_end() }
 						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
@@ -228,7 +237,7 @@ fn main() {
 							if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
 
 							let now = Instant::now();
-							elapsed += match state.receive_signal(now) {
+							elapsed += match controls.receive_signal(now) {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
 								Ok(Signal::ProgramExit) => {
@@ -277,7 +286,7 @@ fn main() {
 						}
 						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
-					Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
+					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				}
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
@@ -287,9 +296,13 @@ fn main() {
 		clear()
 	}
 
-	if let Some(inner) = init.into_inner() {
-		inner.notify_exit();
-		inner.clean_up();
+	if let Some(controls) = init
+		.into_inner()
+		.map(|inner| inner.take_controls())
+		.flatten()
+	{
+		controls.notify_exit();
+		controls.clean_up();
 	}
 	if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
 	exit()
