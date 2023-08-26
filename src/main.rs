@@ -7,18 +7,13 @@ use std::{
 	io::{ Seek, Write, stdout },
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
-	env::{ VarError, var, args },
+	env::{ VarError, var },
 };
 use crossterm::{
-	execute,
-	cursor::Hide,
-	terminal::{
-		enable_raw_mode,
-		disable_raw_mode
-	},
+	terminal::disable_raw_mode,
 	style::{
-		SetForegroundColor as SetForegroundColour,
-		Color as Colour,
+		SetForegroundColor,
+		Color,
 	},
 };
 use crossbeam_channel::RecvTimeoutError;
@@ -31,7 +26,7 @@ use load::{
 	tracks,
 	playlists,
 };
-use state::{ State, Signal };
+use state::{ State, Signal, Flags };
 use echo::{ exit, clear };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Module for interacting with the file-system.
@@ -124,6 +119,47 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
 }
 
+/// Flatten the collective Playlists into one Playlist
+fn flatten(lists: Vec<(Box<str>, Vec<Track>, isize)>) -> Vec<(Box<str>, Vec<Track>, isize)> {
+	let mut new_name = Vec::with_capacity(lists.len());
+
+	let repeats = {
+		let iterator = lists.iter();
+		let minimum = iterator
+			.clone()
+			.min_by_key(|(_, _, repeats)| repeats)
+			.expect("search for an infinity repeation  Empty Vector")
+			.2;
+		if minimum < 0 { minimum } else {
+			iterator
+				.max_by_key(|(_, _, repeats)| repeats)
+				.expect("search for the highest repeat count  Empty Vector")
+				.2
+		}
+	};
+
+	let tracks: Vec<Track> = lists
+		.into_iter()
+		.map(|(name, tracks, _)|
+			{
+				new_name.push(name);
+				tracks.into_iter()
+			}
+		)
+		.flatten()
+		.collect();
+
+	vec![
+		(
+			new_name
+				.join(", with ")
+				.into_boxed_str(),
+			tracks,
+			repeats,
+		)
+	]
+}
+
 fn main() {
 	panic::set_hook(
 		Box::new(|info|
@@ -155,27 +191,10 @@ fn main() {
 
 	let mut out = stdout();
 
-	let headless_flag_set: bool;
-	let mut lists = {
-		let mut files = args()
-			.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
-			.peekable();
+	let (flags, files) = Flags::with_stdout(&mut out);
+	let mut lists = playlists(files);
+	if flags.flatten { lists = flatten(lists) }
 
-		let Some(next_up) = files.peek() else { panic!("get the program arguments  no arguments given") };
-		let is_present = next_up == "-h";
-		headless_flag_set = is_present;
-		if is_present { files.next(); } 
-
-		if !headless_flag_set {
-			if let Err(why) = enable_raw_mode() { log!(err: "enable the raw mode of the current terminal" => why; return exit()) }
-			if let Err(why) = execute!(out,
-				Hide,
-				SetForegroundColour(Colour::Yellow),
-			) { log!(err: "set the terminal style" => why) }
-		}
-
-		playlists(files)
-	};
 	let init = OnceCell::new(); // expensive operation only executed if no err.
 	let mut generator = Rng::new();
 	const SECOND: Duration = Duration::from_secs(1);
@@ -203,7 +222,7 @@ fn main() {
 		}
 
 		let mut songs = tracks(&name, &songs);
-		let state = init.get_or_init(|| if headless_flag_set { State::headless() } else { State::new() });
+		let state = init.get_or_init(|| if flags.headless { State::headless() } else { State::new() });
 		let controls = state.get_controls();
 
 		'list_playback: { // i hate this
@@ -216,10 +235,13 @@ fn main() {
 
 
 				match (state.play_file(get_file(old_songs_index)), controls) {
-					(Ok(playback), None) => playback.sleep_until_end(),
-
-					(Ok(playback), Some(controls)) => 'song_playback: {
+					(Ok(playback), control_state) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
+
+						let Some(controls) = control_state else {
+							break 'song_playback playback.sleep_until_end()
+						};
+
 						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
@@ -233,7 +255,7 @@ fn main() {
 									format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 								}
 							);
-							if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
+							if let Err(why) = out.flush() { log!(err: "flush the standard output" => why) }
 
 							let now = Instant::now();
 							elapsed += match controls.receive_signal(now) {
@@ -283,10 +305,11 @@ fn main() {
 								}, // chain reaction will follow
 							}
 						}
-						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
+
 					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				}
+				if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
 		}
@@ -303,7 +326,7 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
-	if !headless_flag_set {
+	if !flags.headless {
 		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
 	}
 	exit()

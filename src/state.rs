@@ -10,22 +10,31 @@ use crossbeam_channel::{
 	Sender,
 	Receiver,
 };
-use crossterm::event::{
-	self,
-	Event,
-	KeyEvent,
-	KeyCode,
-	KeyModifiers,
+use crossterm::{
+	cursor::Hide,
+	execute,
+	terminal::enable_raw_mode,
+	event::{
+		self,
+		Event,
+		KeyEvent,
+		KeyCode,
+		KeyModifiers,
+	}
 };
 use std::{
+	collections::HashSet,
 	fs::File,
-	io::BufReader,
+	env::args,
+	io::{ BufReader, Stdout },
 	thread::{ Builder, JoinHandle },
 };
 use super::{
 	TICK,
 	DISCONNECTED,
 	Instant,
+	SetForegroundColor,
+	Color,
 	RecvTimeoutError,
 	log,
 	disable_raw_mode,
@@ -47,6 +56,11 @@ pub(crate) struct Controls {
 	signal_receiver: Receiver<Signal>,
 }
 
+/// Flags
+pub(crate) struct Flags {
+	pub flatten: bool,
+	pub headless: bool,
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// High level control signal representation
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -183,6 +197,64 @@ impl Controls {
 			.signal_receiver
 			.recv_deadline(moment + TICK)
 		// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\0\n") }) // commented out because unstable interface
+	}
+}
+
+impl Flags {
+	pub(crate) fn with_stdout(out: &mut Stdout) -> (Self, impl Iterator<Item = String>) {
+		macro_rules! create_flag_identifiers {
+			($($name: ident = $flag: literal)+ [$lone: ident]) => {
+				$(const $name: char = $flag;)+
+				const $lone: &[char] = &[$($name),+];
+			}
+		}
+		create_flag_identifiers!(
+			HEADLESS = 'h'
+			FLATTEN = 'f'
+			[IDENTIFIERS]
+		);
+
+		let (files, flags) = {
+			let flags = { // perform argument checks
+				let mut arguments = args()
+					.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
+					.peekable();
+				if let None = arguments.peek() { panic!("get the program arguments  no arguments given") }
+				arguments
+			}
+				.map_while(|argument|
+					{
+						let flag = argument.strip_prefix('-')?;
+						flag
+							.contains(IDENTIFIERS)
+							.then(|| String::from(flag))
+					}
+				)
+				.collect::<String>();
+			let flag_count = flags.len();
+			let mut flag_map = HashSet::with_capacity(flag_count);
+			for key in flags.chars() { flag_map.insert(key); }
+			(
+				args().skip(flag_count + 1),
+				Self {
+					flatten: flag_map.contains(&FLATTEN),
+					headless: flag_map.contains(&HEADLESS),
+				},
+			)
+		};
+
+		if !flags.headless {
+			if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
+			if let Err(why) = execute!(out,
+				Hide,
+				SetForegroundColor(Color::Yellow),
+			) { log!(err: "set the terminal style" => why) }
+		}
+
+		(
+			flags,
+			files,
+		)
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

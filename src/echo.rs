@@ -8,8 +8,8 @@ use crossterm::{
 	},
 };
 use super::{
-	SetForegroundColour,
-	Colour,
+	SetForegroundColor,
+	Color,
 	log,
 	stdout,
 };
@@ -19,7 +19,7 @@ pub(crate) fn exit() {
 	print!("\r");
 	if let Err(why) = execute!(stdout(),
 		Show,
-		SetForegroundColour(Colour::Reset),
+		SetForegroundColor(Color::Reset),
 	) { log!(err: "reset the terminal style" => why) }
 	print!("\0")
 }
