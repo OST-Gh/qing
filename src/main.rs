@@ -239,6 +239,7 @@ fn main() {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 
 						let Some(controls) = control_state else {
+							if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 } // maybe reduce repeats?
 							break 'song_playback playback.sleep_until_end()
 						};
 
@@ -303,13 +304,13 @@ fn main() {
 									log!(info: "Exiting the program."); 
 									break 'queue
 								}, // chain reaction will follow
-							}
+							};
 						}
+						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 					},
 
 					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				}
-				if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
 		}
