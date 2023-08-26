@@ -215,6 +215,7 @@ impl Flags {
 		);
 
 		let (files, flags) = {
+			let mut flag_count = 0;
 			let flags = { // perform argument checks
 				let mut arguments = args()
 					.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
@@ -225,13 +226,13 @@ impl Flags {
 				.map_while(|argument|
 					{
 						let flag = argument.strip_prefix('-')?;
+						flag_count += 1;
 						flag
 							.contains(IDENTIFIERS)
 							.then(|| String::from(flag))
 					}
 				)
 				.collect::<String>();
-			let flag_count = flags.len();
 			let mut flag_map = HashSet::with_capacity(flag_count);
 			for key in flags.chars() { flag_map.insert(key); }
 			(
