@@ -23,9 +23,9 @@ pub(crate) fn map_files<O>(function: impl FnOnce(&mut Vec<BufReader<File>>) -> O
 
 /// Get the file at the given index.
 ///
-/// Panics:
+/// # Fails:
 ///
-/// The function does not panic, but it does not guarrante that the index is inside the bounds of the static.
+/// - The function does not panic, but it does not guarrante that the index is inside the bounds of the static.
 pub(crate) fn get_file(index: usize) -> &'static mut BufReader<File> {
 	unsafe { FILES.get_unchecked_mut(index) }
 }

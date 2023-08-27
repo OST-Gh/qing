@@ -1,5 +1,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//! <<I hate myself for making documentation for this piece of shit.>>
+//! [I hate myself, for making documentation.]
+//!
+//! Quing works around 2 central structures:
+//! - A [`Track`]
+//! - A [`Playlist`] (grouping of [`Track`], with additional data)
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	panic,
@@ -10,7 +14,9 @@ use std::{
 	env::{ VarError, var },
 };
 use crossterm::{
-	terminal::disable_raw_mode,
+	cursor::Hide,
+	execute,
+	terminal::{ enable_raw_mode, disable_raw_mode },
 	style::{
 		SetForegroundColor,
 		Color,
@@ -26,30 +32,22 @@ use load::{
 	tracks,
 	playlists,
 };
-use state::{ State, Signal, Flags };
+use in_out::{ Bundle, Signal, Flags };
 use echo::{ exit, clear };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Module for interacting with the file-system.
+/// A module for reading from the file system
 mod load;
 
-/// Runtime state structure declaration and implementations.
-// NOTE: state is not a got name, it was a name i cam up with on a whim.
-// TODO: Rename to more sensual name.
-mod state;
+/// A module for handling and interacting with external devices.
+mod in_out;
 
 /// A collection of functions that are used repeatedly to display certain sequences.
 mod echo;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
-///
-/// Info:
-///
-/// This constant
 const TICK: Duration = Duration::from_millis(250);
 
-/// Inter-thread communication channel disconnected.
-///
-/// This is just a default message, that is used when a sender, or receiver, has hung up the between thread connection.
+/// This is a default message that is used when a sender, or receiver, has hung up the connection.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Deserialize)]
@@ -70,7 +68,7 @@ struct Track {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
-/// Macro for general interaction with Standard-out.
+/// A macro for general interaction with Standard-out.
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
@@ -85,7 +83,7 @@ macro_rules! log {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
 ///
-/// This recursive function is used for unexpanded shell(zsh based) expressions, on the call site, and inside the playlist file key(?) of songs inside of a playlist.
+/// This recursive function is used for unexpanded shell(zsh based) expressions, on a call site, and songs' file fields.
 /// It can currently only expand environment variables, which might recurs.
 fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 	fn expand(name: &str) -> Result<String, VarError> {
@@ -119,7 +117,7 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
 }
 
-/// Flatten the collective Playlists into one Playlist
+/// Flatten the collective Playlists into a single Playlist
 fn flatten(lists: Vec<(Box<str>, Vec<Track>, isize)>) -> Vec<(Box<str>, Vec<Track>, isize)> {
 	let mut new_name = Vec::with_capacity(lists.len());
 
@@ -191,11 +189,20 @@ fn main() {
 
 	let mut out = stdout();
 
-	let (flags, files) = Flags::with_stdout(&mut out);
+	let (flags, files) = Flags::new();
+
+	if !flags.headless {
+		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
+		if let Err(why) = execute!(out,
+			Hide,
+			SetForegroundColor(Color::Yellow),
+		) { log!(err: "set the terminal style" => why) }
+	}
+
 	let mut lists = playlists(files);
 	if flags.flatten { lists = flatten(lists) }
 
-	let init = OnceCell::new(); // expensive operation only executed if no err.
+	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
 	let mut generator = Rng::new();
 	const SECOND: Duration = Duration::from_secs(1);
 
@@ -222,8 +229,8 @@ fn main() {
 		}
 
 		let mut songs = tracks(&name, &songs);
-		let state = init.get_or_init(|| if flags.headless { State::headless() } else { State::new() });
-		let controls = state.get_controls();
+		let bundle = initialisable_bundle.get_or_init(|| if flags.headless { Bundle::headless() } else { Bundle::new() });
+		let controls = bundle.get_controls();
 
 		'list_playback: { // i hate this
 			let songs_length = songs.len();
@@ -234,7 +241,7 @@ fn main() {
 				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
 
 
-				match (state.play_file(get_file(old_songs_index)), controls) {
+				match (bundle.play_file(get_file(old_songs_index)), controls) {
 					(Ok(playback), control_state) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 
@@ -300,7 +307,7 @@ fn main() {
 								},
 
 								Err(RecvTimeoutError::Disconnected) => {
-									log!(err: "receive a signal from the playback control thread" => DISCONNECTED);
+									log!(err: "receive a signal from the control thread" => DISCONNECTED);
 									log!(info: "Exiting the program."); 
 									break 'queue
 								}, // chain reaction will follow
@@ -319,9 +326,9 @@ fn main() {
 		clear()
 	}
 
-	if let Some(controls) = init
+	if let Some(controls) = initialisable_bundle
 		.into_inner()
-		.map(|inner| inner.take_controls())
+		.map(Bundle::take_controls)
 		.flatten()
 	{
 		controls.notify_exit();

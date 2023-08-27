@@ -17,7 +17,9 @@ time = -1 # similar to playlist-level time, but for a single song.
 ```
 
 ## Flags:
-##### Use '-h,' as the first argument, to enter headless mode manually
+#### All flags must be passed in before the playlist files.
+##### '-h': to manually enter headless mode.
+##### '-f': to merge all tracks, from the playlist files, into one.
 
 ## Controls:
 ```toml
@@ -32,4 +34,4 @@ time = -1 # similar to playlist-level time, but for a single song.
 'shift_k' = "Toggle the volume of the currently playing track"
 ```
 
-###### NOTE: all inputted playlists are loaded upon starting. all files of the playlist are loaded when it is its turn to play. the program will run in headless mode if the creation of the playback control thread fails.
+###### NOTE: all inputted playlists are loaded upon starting. all files of the playlist are loaded when it is its turn to play. the program will run in headless mode if the creation of the control thread fails.
