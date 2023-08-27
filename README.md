@@ -17,9 +17,11 @@ time = -1 # similar to playlist-level time, but for a single song.
 ```
 
 ## Flags:
-#### All flags must be passed in before the playlist files.
-##### '-h': to manually enter headless mode.
-##### '-f': to merge all tracks, from the playlist files, into one.
+#### All flags must be passed in before the playlist files and start with a dash ('-').
+```toml
+'h' = "to manually enter headless mode."
+'f' = "to merge all tracks, from the playlist files, into one."
+```
 
 ## Controls:
 ```toml
