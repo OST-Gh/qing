@@ -1,6 +1,6 @@
 # quing, a (hopefully) minimalist toml based music player
 
-## Usage: quing [playlist.toml...]
+## Usage: quing [-flags...] [playlist.toml...]
 ```toml
 name = "" # optional name of the playlist
 time = -1 # an optional setting for repeating a playlist n times. if the number is below zero, it'll repeat infinitely

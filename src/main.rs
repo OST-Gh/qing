@@ -23,49 +23,30 @@ use crossterm::{
 	},
 };
 use crossbeam_channel::RecvTimeoutError;
-use serde::Deserialize;
-use fastrand::Rng;
-use load::{
-	FILES,
-	get_file,
-	map_files,
-	tracks,
-	playlists,
-};
 use in_out::{ Bundle, Signal, Flags };
 use echo::{ exit, clear };
+use songs::{
+	FILES,
+	Playlist,
+	get_file,
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// A module for reading from the file system
-mod load;
-
 /// A module for handling and interacting with external devices.
 mod in_out;
 
 /// A collection of functions that are used repeatedly to display certain sequences.
 mod echo;
+
+/// A collection of file related structures, or implementations.
+mod songs;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal rate (tick rate).
+///
+/// Every time related operation is tackted after this constant.
 const TICK: Duration = Duration::from_millis(250);
 
 /// This is a default message that is used when a sender, or receiver, has hung up the connection.
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(Deserialize)]
-/// A playlist with some metadata
-struct Playlist {
-	name: Option<Box<str>>,
-	song: Vec<Track>,
-	time: Option<isize>,
-}
-
-#[derive(Deserialize)]
-#[derive(Clone)]
-/// A song path with aditional metadata
-struct Track {
-	name: Option<Box<str>>,
-	file: Box<str>,
-	time: Option<isize>,
-}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
 /// A macro for general interaction with Standard-out.
@@ -117,47 +98,6 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
 }
 
-/// Flatten the collective Playlists into a single Playlist
-fn flatten(lists: Vec<(Box<str>, Vec<Track>, isize)>) -> Vec<(Box<str>, Vec<Track>, isize)> {
-	let mut new_name = Vec::with_capacity(lists.len());
-
-	let repeats = {
-		let iterator = lists.iter();
-		let minimum = iterator
-			.clone()
-			.min_by_key(|(_, _, repeats)| repeats)
-			.expect("search for an infinity repeation  Empty Vector")
-			.2;
-		if minimum < 0 { minimum } else {
-			iterator
-				.max_by_key(|(_, _, repeats)| repeats)
-				.expect("search for the highest repeat count  Empty Vector")
-				.2
-		}
-	};
-
-	let tracks: Vec<Track> = lists
-		.into_iter()
-		.map(|(name, tracks, _)|
-			{
-				new_name.push(name);
-				tracks.into_iter()
-			}
-		)
-		.flatten()
-		.collect();
-
-	vec![
-		(
-			new_name
-				.join(", with ")
-				.into_boxed_str(),
-			tracks,
-			repeats,
-		)
-	]
-}
-
 fn main() {
 	panic::set_hook(
 		Box::new(|info|
@@ -191,7 +131,7 @@ fn main() {
 
 	let (flags, files) = Flags::new();
 
-	if !flags.headless {
+	if !flags.is_headless() {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
 		if let Err(why) = execute!(out,
 			Hide,
@@ -199,11 +139,16 @@ fn main() {
 		) { log!(err: "set the terminal style" => why) }
 	}
 
-	let mut lists = playlists(files);
-	if flags.flatten { lists = flatten(lists) }
+	let mut lists = files
+		.filter_map(Playlist::try_from_path)
+		.collect();
+	print!("\r\n\n\0");
+
+	if flags.should_flatten() {
+		lists = vec![Playlist::flatten(lists)];
+	}
 
 	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
-	let mut generator = Rng::new();
 	const SECOND: Duration = Duration::from_secs(1);
 
 
@@ -214,22 +159,13 @@ fn main() {
 	let mut lists_index = 0;
 	'queue: while lists_index < lists_length {
 		let old_lists_index = lists_index;
-		let (name, songs, list_repeats) = unsafe { lists.get_unchecked_mut(old_lists_index) };
+		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
+		list.shuffle_song();
+		list.load_song();
 
+		let songs = list.get_song_mut();
 
-		log!(info[name]: "Shuffling all of the songs in [{name}].");
-		let length = songs.len();
-		for value in 0..length {
-			let index = value % length;
-			songs.swap(index, generator.usize(0..=index));
-			songs.swap(index, generator.usize(index..length));
-			// a b c; b inclusive in both random ranges
-			// b a c
-			// b c a
-		}
-
-		let mut songs = tracks(&name, &songs);
-		let bundle = initialisable_bundle.get_or_init(|| if flags.headless { Bundle::headless() } else { Bundle::new() });
+		let bundle = initialisable_bundle.get_or_init(|| if flags.is_headless() { Bundle::headless() } else { Bundle::new() });
 		let controls = bundle.get_controls();
 
 		'list_playback: { // i hate this
@@ -238,22 +174,25 @@ fn main() {
 			while songs_index < songs_length {
 				let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
 				// unless something is very wrong with the index (old), this will not error.
-				let (name, duration, song_repeats) = unsafe { songs.get_unchecked_mut(old_songs_index) };
+				let data = get_file(old_songs_index);
+				let duration = data.get_duration();
+				let song = unsafe { songs.get_unchecked_mut(old_songs_index) };
+				let name = song.get_name();
 
 
-				match (bundle.play_file(get_file(old_songs_index)), controls) {
+				match (bundle.play_file(data), controls) {
 					(Ok(playback), control_state) => 'song_playback: {
 						log!(info[name]: "Playing back the audio contents of [{name}].");
 
 						let Some(controls) = control_state else {
-							if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 } // maybe reduce repeats?
+							song.repeat_or_increment(&mut songs_index); // maybe reduce repeats?
 							break 'song_playback playback.sleep_until_end()
 						};
 
 						playback.set_volume(volume);
 
 						let mut elapsed = Duration::ZERO;
-						while &elapsed <= duration {
+						while elapsed <= duration {
 							let paused = playback.is_paused();
 
 							print!("\r[{}][{volume:.2}]\0",
@@ -313,7 +252,7 @@ fn main() {
 								}, // chain reaction will follow
 							};
 						}
-						if *song_repeats == 0 { songs_index += 1 } else { *song_repeats -= 1 }
+						song.repeat_or_increment(&mut songs_index);
 					},
 
 					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
@@ -321,9 +260,7 @@ fn main() {
 				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
 			}
 		}
-		if *list_repeats == 0 { lists_index += 1 } else { *list_repeats -= 1 }
-		map_files(Vec::clear);
-		clear()
+		list.repeat_or_increment(&mut lists_index);
 	}
 
 	if let Some(controls) = initialisable_bundle
@@ -334,7 +271,7 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
-	if !flags.headless {
+	if !flags.is_headless() {
 		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
 	}
 	exit()

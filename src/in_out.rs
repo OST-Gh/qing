@@ -54,7 +54,7 @@ use super::{
 ///
 /// [`OnceCell`]: std::cell::OnceCell
 pub(crate) struct Bundle {
-	sound_out: (OutputStream, OutputStreamHandle),
+	sound_out: (OutputStream, OutputStreamHandle), // NOTE(from: OST-Gh): Needs to be tuple, otherwise breaks
 	controls: Option<Controls>,
 }
 
@@ -87,11 +87,11 @@ pub(crate) struct Flags {
 	/// If wether, or not, the program should merge all, passed in, lists into one.
 	///
 	/// Specify using: -f
-	pub flatten: bool,
+	should_flatten: bool,
 	/// If quing should spawn a control-thread, or not.
 	///
 	/// Specify using: -h
-	pub headless: bool,
+	is_headless: bool,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -108,6 +108,15 @@ pub(crate) enum Signal {
 	VolumeIncrease,
 	VolumeDecrease,
 	VolumeToggle,
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+macro_rules! create_flag_identifiers {
+	($($constant: ident = $flag: literal = $field: ident)+ [$lone: ident]) => {
+		$(const $constant: char = $flag;)+
+		const $lone: &[char] = &[$(Self::$constant),+];
+
+		$(pub(crate) fn $field(&self) -> bool { self.$field })+
+	};
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Bundle {
@@ -274,24 +283,18 @@ impl Controls {
 }
 
 impl Flags {
+	create_flag_identifiers!(
+		HEADLESS = 'h' = is_headless
+		FLATTEN = 'f' = should_flatten
+		[IDENTIFIERS]
+	);
+
 	/// Split the program arguments into files and flags.
 	///
 	/// # Panics:
 	///
 	/// - Arguments are empty.
 	pub(crate) fn new() -> (Self, impl Iterator<Item = String>) {
-		macro_rules! create_flag_identifiers {
-			($($name: ident = $flag: literal)+ [$lone: ident]) => {
-				$(const $name: char = $flag;)+
-				const $lone: &[char] = &[$($name),+];
-			}
-		}
-		create_flag_identifiers!(
-			HEADLESS = 'h'
-			FLATTEN = 'f'
-			[IDENTIFIERS]
-		);
-
 		let mut flag_count = 0;
 		let flags = { // perform argument checks
 			let mut arguments = args()
@@ -305,7 +308,7 @@ impl Flags {
 					let flag = argument.strip_prefix('-')?;
 					flag_count += 1;
 					flag
-						.contains(IDENTIFIERS)
+						.contains(Self::IDENTIFIERS)
 						.then(|| String::from(flag))
 				}
 			)
@@ -315,8 +318,8 @@ impl Flags {
 
 		(
 			Self {
-				flatten: flag_map.contains(&FLATTEN),
-				headless: flag_map.contains(&HEADLESS),
+				should_flatten: flag_map.contains(&Self::FLATTEN),
+				is_headless: flag_map.contains(&Self::HEADLESS),
 			},
 			args().skip(flag_count + 1),
 		)
