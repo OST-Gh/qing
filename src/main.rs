@@ -1,9 +1,13 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //! [I hate myself, for making documentation.]
 //!
+//! ### How Quing works.
 //! Quing works around 2 central structures:
 //! - A [`Track`]
-//! - A [`Playlist`] (grouping of [`Track`], with additional data)
+//! - A [`Playlist`] (grouping of [`Tracks`], with additional data)
+//!
+//! [`Track`]: songs::Track
+//! [`Tracks`]: songs::Track
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	panic,
@@ -26,7 +30,6 @@ use crossbeam_channel::RecvTimeoutError;
 use in_out::{ Bundle, Signal, Flags };
 use echo::{ exit, clear };
 use songs::{
-	FILES,
 	Playlist,
 	get_file,
 };
@@ -40,16 +43,22 @@ mod echo;
 /// A collection of file related structures, or implementations.
 mod songs;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Constant signal rate (tick rate).
+/// Constant signal [`Duration`] (tick rate). [250 milliseconds]
 ///
-/// Every time related operation is tackted after this constant.
+/// Every time related operation is tackted after this constant.\
 const TICK: Duration = Duration::from_millis(250);
-
-/// This is a default message that is used when a sender, or receiver, has hung up the connection.
+/// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
+///
+/// [`Sender`]: crossbeam_channel::Sender
+/// [`Receiver`]: crossbeam_channel::Receiver
 const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
-/// A macro for general interaction with Standard-out.
+/// A macro for general interaction with Standard-Out.
+///
+/// This macro is, in a general sense, just a fancier [`println`] macro, which also is more tailored towards [raw-mode].
+///
+/// [raw-mode]: crossterm::terminal#raw-mode
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
@@ -140,7 +149,12 @@ fn main() {
 	}
 
 	let mut lists = files
-		.filter_map(Playlist::try_from_path)
+		.filter_map(|path|
+			{
+				log!(info[path]: "Loading and parsing data from [{path}].");
+				Playlist::try_from_path(path)
+			}
+		)
 		.collect();
 	print!("\r\n\n\0");
 
@@ -160,8 +174,15 @@ fn main() {
 	'queue: while lists_index < lists_length {
 		let old_lists_index = lists_index;
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
+
+		let name = list.get_name();
+
+		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		list.shuffle_song();
+
+		log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 		list.load_song();
+		print!("\r\n\0");
 
 		let songs = list.get_song_mut();
 
@@ -218,14 +239,14 @@ fn main() {
 									now.elapsed()
 								},
 
-								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::TrackNext | Signal::TrackBack)) => {
+								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::TrackNext | Signal::TrackBack)) => { // group similar things together to perform DRY.
 									let is_under_threshold = elapsed <= SECOND;
 									match signal {
 										Signal::PlaylistNext => break 'list_playback lists_index += 1,
 										Signal::PlaylistBack => break 'list_playback lists_index -= (old_lists_index > 0 && is_under_threshold) as usize,
 										Signal::TrackNext => break 'song_playback songs_index += 1,
 										Signal::TrackBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
-										_ => unimplemented!()
+										_ => unimplemented!(),
 									}
 								},
 
@@ -237,7 +258,7 @@ fn main() {
 										},
 										Signal::VolumeIncrease => volume += 0.05,
 										Signal::VolumeDecrease => volume -= 0.05,
-										_ => unimplemented!()
+										_ => unimplemented!(),
 									}
 									volume = volume.clamp(0., 2.);
 									playback.set_volume(volume);
@@ -253,11 +274,12 @@ fn main() {
 							};
 						}
 						song.repeat_or_increment(&mut songs_index);
+						clear()
 					},
 
 					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
 				}
-				if let Err(why) = unsafe { FILES.get_unchecked_mut(old_songs_index) }.rewind() { log!(err[name]: "reset the player position inside of [{name}]" => why) }
+				if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "reset the player's position inside of [{name}]" => why) }
 			}
 		}
 		list.repeat_or_increment(&mut lists_index);

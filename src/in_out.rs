@@ -82,15 +82,15 @@ pub(crate) struct Controls {
 /// Flags can be merged, meaning that one does not need to specify multiple separate flags, for example: `quing -h -f`, is instead, `quing -hf`.\
 /// Flag ordering does not matter.
 ///
+/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
+///
 /// [`program arguments`]: args
+/// [`character`]: char
 pub(crate) struct Flags {
 	/// If wether, or not, the program should merge all, passed in, lists into one.
-	///
-	/// Specify using: -f
 	should_flatten: bool,
+
 	/// If quing should spawn a control-thread, or not.
-	///
-	/// Specify using: -h
 	is_headless: bool,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -110,12 +110,28 @@ pub(crate) enum Signal {
 	VolumeToggle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// Shortcut for creating flag character constants.
+///
+/// It also creates a list containging all of the constants.
 macro_rules! create_flag_identifiers {
-	($($constant: ident = $flag: literal = $field: ident)+ [$lone: ident]) => {
-		$(const $constant: char = $flag;)+
+	($($(#[doc = $comment: literal])* $constant: ident = $flag: literal = $field: ident)+ [$lone: ident]) => {
+		$(
+			$(#[doc = $comment])*
+			const $constant: char = $flag;
+		)+
+		/// A set made up of each flag identifier.
 		const $lone: &[char] = &[$(Self::$constant),+];
 
-		$(pub(crate) fn $field(&self) -> bool { self.$field })+
+		$(
+			#[doc = concat!("Refer to [`", stringify!($constant), "`] for more information.")]
+			///
+			#[doc = concat!("One might also refer to [`", stringify!($field), "`] too.")]
+			///
+			#[doc = concat!("[`", stringify!($constant), "`]: Self::", stringify!($constant))]
+			#[doc = concat!("[`", stringify!($field), "`]: Self#field.", stringify!($field))]
+			// macro bullshit
+			pub(crate) fn $field(&self) -> bool { self.$field }
+		)+
 	};
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -284,8 +300,14 @@ impl Controls {
 
 impl Flags {
 	create_flag_identifiers!(
+		/// Don't spawn the control thread.
 		HEADLESS = 'h' = is_headless
+
+		/// Merge all inputted [`Playlists`] into one.
+		///
+		/// [`Playlists`]: crate::songs::Playlist
 		FLATTEN = 'f' = should_flatten
+
 		[IDENTIFIERS]
 	);
 
