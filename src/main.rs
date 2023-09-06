@@ -108,9 +108,12 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 }
 
 fn main() {
+	let mut out = stdout();
+
 	panic::set_hook(
 		Box::new(|info|
 			unsafe {
+				let mut out = stdout();
 				let payload = info.payload();
 				let panic = payload
 					.downcast_ref::<&str>()
@@ -130,13 +133,10 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\0\n");
-				exit();
-
+				exit(&mut out);
 			}
 		)
 	);
-
-	let mut out = stdout();
 
 	let (flags, files) = Flags::new();
 
@@ -230,7 +230,7 @@ fn main() {
 								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 
 								Ok(Signal::ProgramExit) => {
-									clear();
+									clear(&mut out);
 									break 'queue
 								},
 
@@ -250,17 +250,8 @@ fn main() {
 									}
 								},
 
-								Ok(signal @ (Signal::VolumeIncrease | Signal::VolumeDecrease | Signal::VolumeToggle)) => {
-									match signal {
-										Signal::VolumeToggle => if volume <= 0. { volume = volume_before_mute } else {
-											volume_before_mute = volume;
-											volume = 0.
-										},
-										Signal::VolumeIncrease => volume += 0.05,
-										Signal::VolumeDecrease => volume -= 0.05,
-										_ => unimplemented!(),
-									}
-									volume = volume.clamp(0., 2.);
+								Ok(Signal::Volume(signal)) => {
+									signal.manage(&mut volume, &mut volume_before_mute);
 									playback.set_volume(volume);
 									if paused { continue }
 									now.elapsed()
@@ -274,7 +265,7 @@ fn main() {
 							};
 						}
 						song.repeat_or_increment(&mut songs_index);
-						clear()
+						clear(&mut out)
 					},
 
 					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
@@ -296,6 +287,6 @@ fn main() {
 	if !flags.is_headless() {
 		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
 	}
-	exit()
+	exit(&mut out)
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

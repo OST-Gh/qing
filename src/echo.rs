@@ -7,17 +7,17 @@ use crossterm::{
 		ClearType,
 	},
 };
+use std::io::Stdout;
 use super::{
 	SetForegroundColor,
 	Color,
 	log,
-	stdout,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Print the reset ansi sequence.
-pub(crate) fn exit() {
+pub(crate) fn exit(out: &mut Stdout) {
 	print!("\r");
-	if let Err(why) = execute!(stdout(),
+	if let Err(why) = execute!(out,
 		Show,
 		SetForegroundColor(Color::Reset),
 	) { log!(err: "reset the terminal style" => why) }
@@ -25,9 +25,11 @@ pub(crate) fn exit() {
 }
 
 /// Print the clear line sequence.
-pub(crate) fn clear() {
+pub(crate) fn clear(out: &mut Stdout) {
 	print!("\r");
-	execute!(stdout(), Clear(ClearType::CurrentLine)).expect("clear the current line");
+	if let Err(why) = execute!(out,
+		Clear(ClearType::CurrentLine)
+	) { log!(err: "clear the current line" => why) };
 	print!("\n\n\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

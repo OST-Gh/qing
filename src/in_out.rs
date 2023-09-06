@@ -105,9 +105,14 @@ pub(crate) enum Signal {
 	TrackBack,
 	PlaybackToggle,
 
-	VolumeIncrease,
-	VolumeDecrease,
-	VolumeToggle,
+	Volume(Volume),
+}
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub(crate) enum Volume {
+	Increase,
+	Decrease,
+	Toggle
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Shortcut for creating flag character constants.
@@ -345,6 +350,21 @@ impl Flags {
 			},
 			args().skip(flag_count + 1),
 		)
+	}
+}
+
+impl Volume {
+	pub(crate) fn manage(self, volume: &mut f32, before_mute: &mut f32) {
+		match self {
+			Self::Toggle => if volume <= &mut 0. { *volume = *before_mute } else {
+				*before_mute = *volume;
+				*volume = 0.
+			},
+			Self::Increase => *volume += 0.05,
+			Self::Decrease => *volume -= 0.05,
+			_ => unimplemented!(),
+		}
+		*volume = volume.clamp(0., 2.);
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
