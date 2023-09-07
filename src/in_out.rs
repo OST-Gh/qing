@@ -2,7 +2,6 @@
 use rodio::{
 	OutputStream,
 	OutputStreamHandle,
-	Sink,
 	PlayError,
 };
 use crossbeam_channel::{
@@ -24,13 +23,17 @@ use std::{
 	env::args,
 	thread::{ Builder, JoinHandle },
 };
-use super::{
+use crate::{
 	TICK,
 	DISCONNECTED,
+	Sink,
+	Duration,
 	Instant,
 	RecvTimeoutError,
+	songs::Instruction,
 	log,
 	disable_raw_mode,
+	echo::clear,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Bundled In- and Output constructs.
@@ -69,76 +72,108 @@ pub(crate) struct Bundle {
 pub(crate) struct Controls {
 	control_thread: JoinHandle<()>,
 	exit_notifier: Sender<()>,
-	signal_receiver: Receiver<Signal>,
+	signal_receiver: Receiver<Layer>,
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-/// A flag bundle.
-///
-/// This structure is used to partially parse the passed in [`program arguments`] for further use.
-///
-/// The position of flags can only directly be after the executable path (e.g.: //usr/local/bin/quing).\
-/// This' made to be that way, due to the fact that the arguments, after the flags, could all be considered file names.\
-/// Flags can be merged, meaning that one does not need to specify multiple separate flags, for example: `quing -h -f`, is instead, `quing -hf`.\
-/// Flag ordering does not matter.
-///
-/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
-///
-/// [`program arguments`]: args
-/// [`character`]: char
-pub(crate) struct Flags {
-	/// If wether, or not, the program should merge all, passed in, lists into one.
-	should_flatten: bool,
+pub(crate) struct Control(Signal);
 
-	/// If quing should spawn a control-thread, or not.
-	is_headless: bool,
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub(crate) struct Other(Signal);
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+pub(crate) struct Shift(Signal);
+
+create_flags!{
+	#[cfg_attr(debug_assertions, derive(Debug))]
+	/// A flag bundle.
+	///
+	/// This structure is used to partially parse the passed in [`program arguments`] for further use.
+	///
+	/// The position of flags can only directly be after the executable path (e.g.: //usr/local/bin/quing).\
+	/// This' made to be that way, due to the fact that the arguments, after the flags, could all be considered file names.\
+	/// Flags can be merged, meaning that one does not need to specify multiple separate flags, for example: `quing -h -f`, is instead, `quing -hf`.\
+	/// Flag ordering does not matter.
+	///
+	/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
+	///
+	/// [`program arguments`]: args
+	/// [`character`]: char
+	[[Flags]]
+
+	/// Wether if the program should create a control-thread, or not.
+	should_spawn_headless = 'h'
+
+	/// If the program should merge all given [`Playlists`] into one.
+	///
+	/// [`Playlists`]: crate::songs::Playlist
+	should_flatten = 'f'
+
+	/// Wether or not the program should output some information.
+	should_print_version = 'v'
+
+	[IDENTIFIERS]
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
 /// High level control signal representation.
-pub(crate) enum Signal {
-	PlaylistNext,
-	PlaylistBack,
-	ProgramExit,
+pub(crate) enum Layer {
+	Playlist(Control),
+	// Toggle = ProgramExit.
+	// Increm = PlaylistNext.
+	// Decrem = PlaylistBack.
 
-	TrackNext,
-	TrackBack,
-	PlaybackToggle,
+	Track(Other),
+	// Toggle = PlaybackToggle,
+	// Increm = TrackNext,
+	// Decrem = TrackBack,
 
-	Volume(Volume),
+	Volume(Shift),
+	// Toggle = VolumeIncrease,
+	// Increm = VolumeDecrease,
+	// Decrem = VolumeToggle,
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-pub(crate) enum Volume {
-	Increase,
-	Decrease,
-	Toggle
+pub(crate) enum Signal {
+	Increment,
+	Decrement,
+	Toggle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Shortcut for creating flag character constants.
-///
-/// It also creates a list containging all of the constants.
-macro_rules! create_flag_identifiers {
-	($($(#[doc = $comment: literal])* $constant: ident = $flag: literal = $field: ident)+ [$lone: ident]) => {
-		$(
-			$(#[doc = $comment])*
-			const $constant: char = $flag;
-		)+
-		/// A set made up of each flag identifier.
-		const $lone: &[char] = &[$(Self::$constant),+];
+#[macro_export]
+/// Macro that creates the [`Flags`] structure.
+macro_rules! create_flags {
+	($(#[$structure_attribute: meta])* [[$structure: ident]] $($(#[$field_attribute: meta])* $field: ident = $flag: literal)+ [$lone: ident]) => {
+		$(#[$structure_attribute])*
+		pub(crate) struct $structure {
+			$(
+				$(#[$field_attribute])*
+				///
+				#[doc = concat!("Specify using '`-", $flag, "`'.")]
+				$field: bool
+			),+
+		}
 
-		$(
-			#[doc = concat!("Refer to [`", stringify!($constant), "`] for more information.")]
-			///
-			#[doc = concat!("One might also refer to [`", stringify!($field), "`] too.")]
-			///
-			#[doc = concat!("[`", stringify!($constant), "`]: Self::", stringify!($constant))]
-			#[doc = concat!("[`", stringify!($field), "`]: Self#field.", stringify!($field))]
-			// macro bullshit
-			pub(crate) fn $field(&self) -> bool { self.$field }
-		)+
+		impl $structure {
+			/// A set made up of each flag identifier.
+			const $lone: [char; 0 $( + { $flag /* i hate this */; 1 })+] = [$($flag),+];
+
+			fn from_map(map: HashSet<char>) -> Self {
+				Self { $($field: map.contains(&$flag)),+ }
+			}
+
+			$(
+				#[doc = concat!("Refer to [`", stringify!($field), "`] for more information.")]
+				///
+				#[doc = concat!("[`", stringify!($field), "`]: Self#field.", stringify!($field))]
+				// macro bullshit
+				pub(crate) fn $field(&self) -> bool { self.$field }
+			)+
+		}
 	};
 }
+use create_flags; // shitty workaround
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Bundle {
 	/// Convenience function for less repetition.
@@ -175,29 +210,33 @@ impl Bundle {
 					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
 						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => match code {
-								'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-								'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-								'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-									if let Err(why) = signal_sender.send(Signal::ProgramExit) { log!(err: "send a signal to the playback" => why) }
-									return
-								},
+							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => {
+								#[cfg(debug_assertions)] print!("\r{code:?} {modifiers:?}\0\n");
+								match code {
+									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
+									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
+									'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
+										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(err: "send a signal to the playback" => why) }
+										return
+									},
 
-								'l' => Signal::TrackNext,
-								'j' => Signal::TrackBack,
-								'k' => Signal::PlaybackToggle,
+									'l' => Layer::Track(Other(Signal::Increment)),
+									'j' => Layer::Track(Other(Signal::Decrement)),
+									'k' => Layer::Track(Other(Signal::Toggle)),
 
-								'L' => Signal::VolumeIncrease,
-								'J' => Signal::VolumeDecrease,
-								'K' => Signal::VolumeToggle,
+									'L' => Layer::Volume(Shift(Signal::Increment)),
+									'J' => Layer::Volume(Shift(Signal::Decrement)),
+									'K' => Layer::Volume(Shift(Signal::Toggle)),
 
-								_ => continue,
+									_ => continue,
+								}
 							}
 							#[allow(unused_variables)] event => {
 								#[cfg(debug_assertions)] print!("\r{event:?}\0\n");
 								continue
 							}
 						};
+						#[cfg(debug_assertions)] print!("\r{signal:?}\0\n");
 						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 					}
 				)
@@ -295,7 +334,7 @@ impl Controls {
 	}
 
 	/// Try to receive a signal, by waiting for it for a set amount of time.
-	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
+	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Layer, RecvTimeoutError> {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
@@ -304,18 +343,6 @@ impl Controls {
 }
 
 impl Flags {
-	create_flag_identifiers!(
-		/// Don't spawn the control thread.
-		HEADLESS = 'h' = is_headless
-
-		/// Merge all inputted [`Playlists`] into one.
-		///
-		/// [`Playlists`]: crate::songs::Playlist
-		FLATTEN = 'f' = should_flatten
-
-		[IDENTIFIERS]
-	);
-
 	/// Split the program arguments into files and flags.
 	///
 	/// # Panics:
@@ -343,28 +370,50 @@ impl Flags {
 		let mut flag_map = HashSet::with_capacity(flag_count);
 		for key in flags.chars() { flag_map.insert(key); }
 
-		(
-			Self {
-				should_flatten: flag_map.contains(&Self::FLATTEN),
-				is_headless: flag_map.contains(&Self::HEADLESS),
-			},
-			args().skip(flag_count + 1),
-		)
+		(Self::from_map(flag_map), args().skip(flag_count + 1))
 	}
 }
 
-impl Volume {
-	pub(crate) fn manage(self, volume: &mut f32, before_mute: &mut f32) {
-		match self {
-			Self::Toggle => if volume <= &mut 0. { *volume = *before_mute } else {
-				*before_mute = *volume;
-				*volume = 0.
+impl Control {
+	/// Perform some operations on the passed in values, and return an [`Instruction`] to the outer loop.
+	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
+		match self.0 {
+			Signal::Increment => Instruction::Next,
+			Signal::Decrement => if elapsed <= Duration::from_secs(1) { return Instruction::Back } else { return Instruction::Hold },
+			Signal::Toggle => {
+				clear();
+				Instruction::Exit
 			},
-			Self::Increase => *volume += 0.05,
-			Self::Decrease => *volume -= 0.05,
-			_ => unimplemented!(),
 		}
-		*volume = volume.clamp(0., 2.);
+	}
+}
+
+impl Other {
+	pub(crate) fn manage(self, playback: &Sink, now: Instant, elapsed: Duration, songs_index: &mut usize) -> Duration {
+		match self.0 {
+			Signal::Increment =>  *songs_index += 1,
+			Signal::Decrement => *songs_index -= (songs_index > &mut 0 && elapsed <= Duration::from_secs(1)) as usize,
+
+			Signal::Toggle => {
+				if playback.is_paused() { playback.play() } else { playback.pause() }
+				return now.elapsed()
+			},
+		}
+		Duration::ZERO
+	}
+}
+
+impl Shift {
+	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
+		match self.0 {
+			Signal::Increment => *volume += 0.05,
+			Signal::Decrement => *volume -= 0.05,
+			Signal::Toggle => *volume += 2.0 * -*volume,
+		}
+		*volume = volume.clamp(-1.0, 2.0);
+		playback.set_volume(volume.clamp(0.0, 2.0));
+		if playback.is_paused() { return Duration::ZERO }
+		now.elapsed()
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

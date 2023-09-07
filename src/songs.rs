@@ -2,14 +2,26 @@
 use serde::Deserialize;
 use std::{
 	sync::Once,
-	io::BufReader,
+	io::{ BufReader, Seek, Write },
 	ops::{ Deref, DerefMut },
 	fs::{ File, read_to_string },
 };
-use super::{
+use crate::{
+	TICK,
+	DISCONNECTED,
 	Duration,
+	Instant,
+	Sink,
+	RecvTimeoutError,
 	log,
 	fmt_path,
+	stdout,
+	echo::clear,
+	in_out::{
+		Bundle,
+		Controls,
+		Layer,
+	},
 };
 use lofty::{ read_from_path, AudioFile };
 use toml::from_str;
@@ -42,6 +54,14 @@ pub(crate) struct MetaData {
 	///
 	/// [`stream`]: Self#field.stream
 	duration: Duration,
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+pub(crate) enum Instruction {
+	Hold,
+	Done,
+	Next,
+	Back,
+	Exit,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Utility function for implementing repetition behavior.
@@ -159,11 +179,6 @@ impl Playlist {
 	/// [`string slice`]: str
 	pub(crate) fn get_name(&self) -> String { name_from(&self.name) }
 
-	/// Get access to a mutable reference of a slice containing [`Tracks`].
-	///
-	/// [`Tracks`]: Track
-	pub(crate) fn get_song_mut(&mut self) -> &mut [Track] { &mut self.song }
-
 	/// Perform an in-place item shuffle on the [`Playlist`]'s [`Tracks`].
 	///
 	/// [`Tracks`]: Track
@@ -227,6 +242,50 @@ impl Playlist {
 			}
 		}
 	}
+
+	pub(crate) fn play(&mut self, bundle: &Bundle, lists_index: &mut usize, volume: &mut f32) -> bool { // bool = should exit or not.
+		let name = self.get_name();
+		let Self { ref mut song, .. } = self;
+
+		let old_lists_index = *lists_index;
+		let songs_length = song.len();
+		let mut songs_index = 0;
+
+		let controls = bundle.get_controls();
+
+		while songs_index < songs_length {
+			let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
+			// unless something is very wrong with the index (old), this will not error.
+			let song = unsafe {
+				self
+					.song
+					.get_unchecked_mut(old_songs_index)
+			};
+
+
+			match bundle.play_file(get_file(old_songs_index)) {
+				Ok(playback) => 'song: {
+					let Some(controls) = controls else { break 'song song.play_headless(playback, &mut songs_index) };
+					match song.play(playback, &mut songs_index, controls, volume) {
+						Instruction::Hold => { },
+						Instruction::Done => self.repeat_or_increment(lists_index),
+						Instruction::Next => {
+							*lists_index += 1;
+							return false
+						},
+						Instruction::Back => {
+							*lists_index -= (old_lists_index > 0) as usize;
+							return false
+						},
+						Instruction::Exit => return true,
+					}
+				},
+				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; return true), // assume error will occur on the other tracks too
+			}
+			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "reset the player's position inside of [{name}]" => why) }
+		}
+		false
+	}
 }
 
 impl Track {
@@ -241,6 +300,51 @@ impl Track {
 	///
 	/// The function should be used so as to advance the playback.
 	pub(crate) fn repeat_or_increment(&mut self, index: &mut usize) { decrement_or_increment(&mut self.time, index) }
+
+	pub(crate) fn play_headless(&mut self, playback: Sink, songs_index: &mut usize) {
+		self.repeat_or_increment(songs_index);
+		playback.sleep_until_end()
+	}
+
+	pub(crate) fn play(&mut self, playback: Sink, songs_index: &mut usize, controls: &Controls, volume: &mut f32) -> Instruction {
+		let name = self.get_name();
+		log!(info[name]: "Playing back the audio contents of [{name}].");
+
+		playback.set_volume(volume.clamp(0.0, 2.0));
+
+		let duration = get_file(*songs_index).get_duration();
+		let mut elapsed = Duration::ZERO;
+
+		while elapsed <= duration {
+			let paused = playback.is_paused();
+
+			print!("\r[{}][{volume:>5.2}]\0",
+				{
+					let seconds = elapsed.as_secs();
+					let minutes = seconds / 60;
+					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
+				}
+			);
+			if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
+
+			let now = Instant::now();
+			elapsed += match controls.receive_signal(now) {
+				Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
+				Ok(Layer::Playlist(signal)) => return signal.manage(elapsed),
+
+				Ok(Layer::Track(signal)) => signal.manage(&playback, now, elapsed, songs_index),
+				Ok(Layer::Volume(signal)) => signal.manage(&playback, now, volume),
+
+				Err(RecvTimeoutError::Disconnected) => {
+					log!(err: "receive a signal from the control thread" => DISCONNECTED);
+					log!(info: "Exiting the program."); 
+					return Instruction::Exit
+				}, // chain reaction will follow
+			}
+		}
+		self.repeat_or_increment(songs_index);
+		Instruction::Done
+	}
 }
 
 impl MetaData {

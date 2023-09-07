@@ -4,3 +4,4 @@
 - Better logging
 - Optional file based logging
 - Outputting usefull information into stdout upon exiting.
+- Abstract more.

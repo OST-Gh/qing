@@ -12,7 +12,7 @@
 use std::{
 	panic,
 	cell::OnceCell,
-	io::{ Seek, Write, stdout },
+	io::stdout,
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
 	env::{ VarError, var },
@@ -27,12 +27,10 @@ use crossterm::{
 	},
 };
 use crossbeam_channel::RecvTimeoutError;
-use in_out::{ Bundle, Signal, Flags };
+use rodio::Sink;
+use in_out::{ Bundle, Flags };
 use echo::{ exit, clear };
-use songs::{
-	Playlist,
-	get_file,
-};
+use songs::Playlist;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 mod in_out;
@@ -108,12 +106,9 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 }
 
 fn main() {
-	let mut out = stdout();
-
 	panic::set_hook(
 		Box::new(|info|
 			unsafe {
-				let mut out = stdout();
 				let payload = info.payload();
 				let panic = payload
 					.downcast_ref::<&str>()
@@ -133,20 +128,21 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\0\n");
-				exit(&mut out);
+				exit();
 			}
 		)
 	);
 
 	let (flags, files) = Flags::new();
-
-	if !flags.is_headless() {
+	if !flags.should_spawn_headless() {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
-		if let Err(why) = execute!(out,
+		if let Err(why) = execute!(stdout(),
 			Hide,
 			SetForegroundColor(Color::Yellow),
 		) { log!(err: "set the terminal style" => why) }
 	}
+
+	if flags.should_print_version() { println!(concat!(env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), '.')) }
 
 	let mut lists = files
 		.filter_map(|path|
@@ -158,20 +154,17 @@ fn main() {
 		.collect();
 	print!("\r\n\n\0");
 
-	if flags.should_flatten() {
-		lists = vec![Playlist::flatten(lists)];
-	}
+	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)] }
 
 	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
-	const SECOND: Duration = Duration::from_secs(1);
 
-
-	let mut volume = 1.;
-	let mut volume_before_mute = 1.;
+	let mut volume = 1.0;
+	// 1 + 2 * -1 = 1 - 2 = -1 
+	// -1 + 2 * 1 = -1 + 2 = 1
 
 	let lists_length = lists.len();
 	let mut lists_index = 0;
-	'queue: while lists_index < lists_length {
+	while lists_index < lists_length {
 		let old_lists_index = lists_index;
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
@@ -184,96 +177,10 @@ fn main() {
 		list.load_song();
 		print!("\r\n\0");
 
-		let songs = list.get_song_mut();
+		let bundle = initialisable_bundle.get_or_init(|| if flags.should_spawn_headless() { Bundle::headless() } else { Bundle::new() });
 
-		let bundle = initialisable_bundle.get_or_init(|| if flags.is_headless() { Bundle::headless() } else { Bundle::new() });
-		let controls = bundle.get_controls();
-
-		'list_playback: { // i hate this
-			let songs_length = songs.len();
-			let mut songs_index = 0;
-			while songs_index < songs_length {
-				let old_songs_index = songs_index; // (sort of) proxy to index (used because of rewind code)
-				// unless something is very wrong with the index (old), this will not error.
-				let data = get_file(old_songs_index);
-				let duration = data.get_duration();
-				let song = unsafe { songs.get_unchecked_mut(old_songs_index) };
-				let name = song.get_name();
-
-
-				match (bundle.play_file(data), controls) {
-					(Ok(playback), control_state) => 'song_playback: {
-						log!(info[name]: "Playing back the audio contents of [{name}].");
-
-						let Some(controls) = control_state else {
-							song.repeat_or_increment(&mut songs_index); // maybe reduce repeats?
-							break 'song_playback playback.sleep_until_end()
-						};
-
-						playback.set_volume(volume);
-
-						let mut elapsed = Duration::ZERO;
-						while elapsed <= duration {
-							let paused = playback.is_paused();
-
-							print!("\r[{}][{volume:.2}]\0",
-								{
-									let seconds = elapsed.as_secs();
-									let minutes = seconds / 60;
-									format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
-								}
-							);
-							if let Err(why) = out.flush() { log!(err: "flush the standard output" => why) }
-
-							let now = Instant::now();
-							elapsed += match controls.receive_signal(now) {
-								Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
-
-								Ok(Signal::ProgramExit) => {
-									clear(&mut out);
-									break 'queue
-								},
-
-								Ok(Signal::PlaybackToggle) => {
-									if paused { playback.play() } else { playback.pause() }
-									now.elapsed()
-								},
-
-								Ok(signal @ (Signal::PlaylistNext | Signal::PlaylistBack | Signal::TrackNext | Signal::TrackBack)) => { // group similar things together to perform DRY.
-									let is_under_threshold = elapsed <= SECOND;
-									match signal {
-										Signal::PlaylistNext => break 'list_playback lists_index += 1,
-										Signal::PlaylistBack => break 'list_playback lists_index -= (old_lists_index > 0 && is_under_threshold) as usize,
-										Signal::TrackNext => break 'song_playback songs_index += 1,
-										Signal::TrackBack => break 'song_playback songs_index -= (old_songs_index > 0 && is_under_threshold) as usize,
-										_ => unimplemented!(),
-									}
-								},
-
-								Ok(Signal::Volume(signal)) => {
-									signal.manage(&mut volume, &mut volume_before_mute);
-									playback.set_volume(volume);
-									if paused { continue }
-									now.elapsed()
-								},
-
-								Err(RecvTimeoutError::Disconnected) => {
-									log!(err: "receive a signal from the control thread" => DISCONNECTED);
-									log!(info: "Exiting the program."); 
-									break 'queue
-								}, // chain reaction will follow
-							};
-						}
-						song.repeat_or_increment(&mut songs_index);
-						clear(&mut out)
-					},
-
-					(Err(why), _) => log!(err[name]: "playback [{name}] from the default audio output device" => why; break 'queue), // assume error will occur on the other tracks too
-				}
-				if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "reset the player's position inside of [{name}]" => why) }
-			}
-		}
-		list.repeat_or_increment(&mut lists_index);
+		if list.play(bundle, &mut lists_index, &mut volume) { break };
+		clear()
 	}
 
 	if let Some(controls) = initialisable_bundle
@@ -284,9 +191,9 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
-	if !flags.is_headless() {
+	if !flags.should_spawn_headless() {
 		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
 	}
-	exit(&mut out)
+	exit()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

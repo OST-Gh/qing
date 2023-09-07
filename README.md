@@ -21,6 +21,7 @@ time = -1 # similar to playlist-level time, but for a single song.
 ```toml
 'h' = "to manually enter headless mode."
 'f' = "to merge all tracks, from the playlist files, into one."
+'v' = "to output some general package information."
 ```
 
 ## Controls:
