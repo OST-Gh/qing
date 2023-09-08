@@ -389,17 +389,22 @@ impl Control {
 }
 
 impl Other {
-	pub(crate) fn manage(self, playback: &Sink, now: Instant, elapsed: Duration, songs_index: &mut usize) -> Duration {
+	/// 
+	/// 
+	/// # Values:
+	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Signal`].
+	/// - [`false`]: It signifies the exact opposite.
+	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
 		match self.0 {
-			Signal::Increment =>  *songs_index += 1,
+			Signal::Increment => *songs_index += 1,
 			Signal::Decrement => *songs_index -= (songs_index > &mut 0 && elapsed <= Duration::from_secs(1)) as usize,
 
 			Signal::Toggle => {
 				if playback.is_paused() { playback.play() } else { playback.pause() }
-				return now.elapsed()
+				return false
 			},
 		}
-		Duration::ZERO
+		true
 	}
 }
 

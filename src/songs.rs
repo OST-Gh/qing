@@ -16,7 +16,6 @@ use crate::{
 	log,
 	fmt_path,
 	stdout,
-	echo::clear,
 	in_out::{
 		Bundle,
 		Controls,
@@ -332,7 +331,7 @@ impl Track {
 				Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
 				Ok(Layer::Playlist(signal)) => return signal.manage(elapsed),
 
-				Ok(Layer::Track(signal)) => signal.manage(&playback, now, elapsed, songs_index),
+				Ok(Layer::Track(signal)) => if signal.manage(&playback, elapsed, songs_index) { return Instruction::Hold } else { now.elapsed() },
 				Ok(Layer::Volume(signal)) => signal.manage(&playback, now, volume),
 
 				Err(RecvTimeoutError::Disconnected) => {
