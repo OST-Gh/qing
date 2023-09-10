@@ -62,11 +62,11 @@ macro_rules! log {
 		{
 			print!(concat!("\rA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
-			print!("\0\n");
+			print!("\n\0");
 			$($($retaliation)+)?
 		}
 	};
-	(info$([$($visible: ident)+])?: $message: literal) => { print!(concat!('\r', $message, "\0\n") $(, $($visible = $visible),+)?) };
+	(info$([$($visible: ident)+])?: $message: literal) => { print!(concat!('\r', $message, "\n\0") $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
@@ -127,7 +127,7 @@ fn main() {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
-				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\0\n");
+				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
 				exit();
 			}
 		)
@@ -142,7 +142,7 @@ fn main() {
 		) { log!(err: "set the terminal style" => why) }
 	}
 
-	if flags.should_print_version() { println!(concat!(env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), '.')) }
+	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
 	let mut lists = files
 		.filter_map(|path|

@@ -211,7 +211,7 @@ impl Bundle {
 						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
 							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => {
-								#[cfg(debug_assertions)] print!("\r{code:?} {modifiers:?}\0\n");
+								#[cfg(debug_assertions)] print!("\r{code:?} {modifiers:?}\n\0");
 								match code {
 									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
 									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
@@ -232,11 +232,11 @@ impl Bundle {
 								}
 							}
 							#[allow(unused_variables)] event => {
-								#[cfg(debug_assertions)] print!("\r{event:?}\0\n");
+								#[cfg(debug_assertions)] print!("\r{event:?}\n\0");
 								continue
 							}
 						};
-						#[cfg(debug_assertions)] print!("\r{signal:?}\0\n");
+						#[cfg(debug_assertions)] print!("\r{signal:?}\n\0");
 						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 					}
 				)
@@ -338,7 +338,7 @@ impl Controls {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
-		// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\0\n") }) // commented out because unstable interface
+		// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\n\0") }) // commented out because unstable interface
 	}
 }
 
