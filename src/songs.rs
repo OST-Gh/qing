@@ -55,11 +55,20 @@ pub(crate) struct MetaData {
 	duration: Duration,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#[cfg_attr(debug_assertions, derive(Debug))]
+/// An instruction that the [`play`] function of a [`Playlist`] uses to control itself.
+///
+/// [`play`]: Playlist::play
 pub(crate) enum Instruction {
+	/// Don't progress the playback index.
 	Hold,
+	/// The playback finished without any issues.
 	Done,
+	/// Manual skip to the next track.
 	Next,
+	/// Manual backwards skip to a previous track.
 	Back,
+	/// Exit the program.
 	Exit,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -242,6 +251,11 @@ impl Playlist {
 		}
 	}
 
+	/// Play the entire list back.
+	///
+	/// # The Output's Meaning:
+	/// - [`true`]: the program has been manually exited.
+	/// - [`false`]: progress to the next playlist.
 	pub(crate) fn play(&mut self, bundle: &Bundle, lists_index: &mut usize, volume: &mut f32) -> bool { // bool = should exit or not.
 		let name = self.get_name();
 		let Self { ref mut song, .. } = self;
@@ -300,11 +314,15 @@ impl Track {
 	/// The function should be used so as to advance the playback.
 	pub(crate) fn repeat_or_increment(&mut self, index: &mut usize) { decrement_or_increment(&mut self.time, index) }
 
+	/// Play without a head.
+	///
+	/// This will severily impare one's ability to control the playback.
 	pub(crate) fn play_headless(&mut self, playback: Sink, songs_index: &mut usize) {
 		self.repeat_or_increment(songs_index);
 		playback.sleep_until_end()
 	}
 
+	/// Play the track back.
 	pub(crate) fn play(&mut self, playback: Sink, songs_index: &mut usize, controls: &Controls, volume: &mut f32) -> Instruction {
 		let name = self.get_name();
 		log!(info[name]: "Playing back the audio contents of [{name}].");

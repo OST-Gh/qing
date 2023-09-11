@@ -76,12 +76,15 @@ pub(crate) struct Controls {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with `CTRL` held down.
 pub(crate) struct Control(Signal);
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with nothing held down.
 pub(crate) struct Other(Signal);
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with `Shift` held down.
 pub(crate) struct Shift(Signal);
 
 create_flags!{
@@ -135,9 +138,22 @@ pub(crate) enum Layer {
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
+/// The three main controls.
+///
+/// A signal can be interpreted alone, but then some meaning would be lost.\
+/// See: [`Control`], [`Other`] and [`Shift`].
 pub(crate) enum Signal {
+	/// Move up within something, usually a manipulate a number.
+	///
+	/// Corresponds to: `l`.
 	Increment,
+	/// Move down within something, usually a manipulate a number.
+	///
+	/// Corresponds to: `j`.
 	Decrement,
+	/// Toggle something, or perform some kind of special action.
+	///
+	/// Corresponds to: `k`.
 	Toggle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -375,7 +391,7 @@ impl Flags {
 }
 
 impl Control {
-	/// Perform some operations on the passed in values, and return an [`Instruction`] to the outer loop.
+	/// Manage the playlist's playback or program.
 	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
 		match self.0 {
 			Signal::Increment => Instruction::Next,
@@ -389,11 +405,13 @@ impl Control {
 }
 
 impl Other {
-	/// 
+	/// Manage the track's playback.
 	/// 
 	/// # Values:
-	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Signal`].
+	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Instruction`].
 	/// - [`false`]: It signifies the exact opposite.
+	///
+	/// [`Hold`]: crate::songs::Instruction::Hold
 	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
 		match self.0 {
 			Signal::Increment => *songs_index += 1,
@@ -409,6 +427,7 @@ impl Other {
 }
 
 impl Shift {
+	/// Manage the program's volume.
 	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
 		match self.0 {
 			Signal::Increment => *volume += 0.05,
