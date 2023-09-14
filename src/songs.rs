@@ -278,6 +278,9 @@ impl Playlist {
 
 			match bundle.play_file(get_file(old_songs_index)) {
 				Ok(playback) => 'song: {
+					let name = song.get_name();
+					log!(info[name]: "Playing back the audio contents of [{name}].");
+
 					let Some(controls) = controls else { break 'song song.play_headless(playback, &mut songs_index) };
 					match song.play(playback, &mut songs_index, controls, volume) {
 						Instruction::Hold => { },
@@ -324,9 +327,6 @@ impl Track {
 
 	/// Play the track back.
 	pub(crate) fn play(&mut self, playback: Sink, songs_index: &mut usize, controls: &Controls, volume: &mut f32) -> Instruction {
-		let name = self.get_name();
-		log!(info[name]: "Playing back the audio contents of [{name}].");
-
 		playback.set_volume(volume.clamp(0.0, 2.0));
 
 		let duration = get_file(*songs_index).get_duration();
