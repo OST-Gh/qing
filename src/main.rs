@@ -12,14 +12,16 @@
 use std::{
 	panic,
 	cell::OnceCell,
-	io::stdout,
+	env::args,
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
 	env::{ VarError, var },
+	io::{ stdout, stdin, BufRead },
 };
 use crossterm::{
 	cursor::Hide,
 	execute,
+	tty::IsTty,
 	terminal::{ enable_raw_mode, disable_raw_mode },
 	style::{
 		SetForegroundColor,
@@ -60,13 +62,12 @@ const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 macro_rules! log {
 	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
-			print!(concat!("\rA non-fatal error occurred whilst attempting to ", $message, ';') $(, $($visible = $visible),+)?);
+			print!(concat!("\rError whilst ", $message, ';') $(, $($visible = $visible),+)?);
 			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
 			print!("\n\0");
 			$($($retaliation)+)?
 		}
 	};
-	(info$([$($visible: ident)+])?: $message: literal) => { print!(concat!('\r', $message, "\n\0") $(, $($visible = $visible),+)?) };
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
@@ -95,14 +96,14 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 					_ => return Some(String::from(part)),
 				} {
 					Ok(part) => Some(part),
-					Err(why) => log!(err[part]: "expand the shell expression [{part}] to a path" => why; None)
+					Err(why) => log!(err[part]: "expanding [{part}] to a path" => why; None)
 				}
 			)
 			.collect::<Vec<String>>()
 			.join(MAIN_SEPARATOR_STR)
 	)
 		.canonicalize()
-		.unwrap_or_else(|why| log!(err[path]: "canonicalise the path [{path}]" => why; PathBuf::new()))
+		.unwrap_or_else(|why| log!(err[path]: "canonicalising [{path}]" => why; PathBuf::new()))
 }
 
 fn main() {
@@ -128,31 +129,43 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
-				exit();
+			exit();
 			}
 		)
 	);
 
-	let (flags, files) = Flags::new();
-	if !flags.should_spawn_headless() {
+	let is_tty = stdin().is_tty();
+	let mut arguments: Vec<String> = args()
+		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
+		.collect();
+	if !is_tty {
+		arguments.reserve(16);
+		arguments.extend(
+			stdin()
+				.lock()
+				.lines()
+				.filter_map(Result::ok)
+				.map(String::from)
+		)
+	};
+	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
+	let (flags, files) = Flags::separate_from(arguments);
+	if !flags.should_spawn_headless() || is_tty {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
 		if let Err(why) = execute!(stdout(),
 			Hide,
 			SetForegroundColor(Color::Yellow),
-		) { log!(err: "set the terminal style" => why) }
+		) { log!(err: "setting the terminal style" => why) }
 	}
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let mut lists = files
-		.filter_map(|path|
-			{
-				log!(info[path]: "Loading and parsing data from [{path}].");
-				Playlist::try_from_path(path)
-			}
-		)
+	let (outlier, rest) = Playlist::from_outliers(files);
+	let mut lists: Vec<Playlist> = rest
+		.into_iter()
+		.filter_map(|(contents, path)| Playlist::try_from_contents((contents, path)))
 		.collect();
-	print!("\r\n\n\0");
+	lists.push(outlier);
 
 	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)] }
 
@@ -168,14 +181,8 @@ fn main() {
 		let old_lists_index = lists_index;
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
-		let name = list.get_name();
-
-		log!(info[name]: "Shuffling all of the songs in [{name}].");
 		list.shuffle_song();
-
-		log!(info[name]: "Loading all of the audio contents of the songs in [{name}].");
 		list.load_song();
-		print!("\r\n\0");
 
 		let bundle = initialisable_bundle.get_or_init(|| if flags.should_spawn_headless() { Bundle::headless() } else { Bundle::new() });
 

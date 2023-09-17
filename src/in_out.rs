@@ -18,9 +18,8 @@ use crossterm::event::{
 };
 use std::{
 	collections::HashSet,
-	io::BufReader,
 	fs::File,
-	env::args,
+	io::BufReader,
 	thread::{ Builder, JoinHandle },
 };
 use crate::{
@@ -200,17 +199,21 @@ impl Bundle {
 	///
 	/// [`OutputStream's try_default`]: rodio::OutputStream::try_default
 	fn output_device() -> (OutputStream, OutputStreamHandle) {
-		log!(info: "Determining the output device.");
 		rodio::OutputStream::try_default()
 			.unwrap_or_else(|why|
 				{
-					if let Err(why) = disable_raw_mode() { log!(err: "disable the raw mode of the current terminal" => why) }
+					if let Err(why) = disable_raw_mode() { log!(err: "disabling raw-mode" => why) }
 					panic!("determine the default audio output device  {why}")
 				}
 			)
 	}
 
-	/// Initialize.
+	/// Create a new [`Bundle`].
+	///
+	/// [`new`] mainly differs from [`headless`] by it spawning a control-thread.
+	///
+	/// [`new`]: Self::new
+	/// [`headless`]: Self::headless
 	pub(crate) fn new() -> Self {
 		let sound_out = Self::output_device();
 
@@ -219,7 +222,6 @@ impl Bundle {
 		let controls = 'controls: {
 			let Ok(_) = event::poll(TICK) else { break 'controls None };
 
-			log!(info: "Spinning up the control thread.");
 			let Ok(control_thread) = Builder::new()
 				.name(String::from("Control"))
 				.spawn(move ||
@@ -227,12 +229,11 @@ impl Bundle {
 						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
 						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
 							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => {
-								#[cfg(debug_assertions)] print!("\r{code:?} {modifiers:?}\n\0");
 								match code {
 									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
 									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
 									'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(err: "send a signal to the playback" => why) }
+										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(err: "sending a signal" => why) }
 										return
 									},
 
@@ -247,22 +248,16 @@ impl Bundle {
 									_ => continue,
 								}
 							}
-							#[allow(unused_variables)] event => {
-								#[cfg(debug_assertions)] print!("\r{event:?}\n\0");
-								continue
-							}
+							_ => continue,
 						};
-						#[cfg(debug_assertions)] print!("\r{signal:?}\n\0");
 						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 					}
 				)
-				.map_err(|why| log!(err: "create the control thread" => why)) else { break 'controls None };
+				.map_err(|why| log!(err: "creating control-thread" => why)) else { break 'controls None };
 
 			Some(Controls { control_thread, exit_notifier, signal_receiver })
 		};
-		if controls.is_none() { log!(info: "Starting in headless mode.") }
 
-		print!("\n\r\0");
 		Self {
 			sound_out,
 			controls,
@@ -354,7 +349,6 @@ impl Controls {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
-		// .inspect(|signal| { #[cfg(debug_assertions)] print!("\r{signal:?}\n\0") }) // commented out because unstable interface
 	}
 }
 
@@ -364,15 +358,10 @@ impl Flags {
 	/// # Panics:
 	///
 	/// - Arguments are empty.
-	pub(crate) fn new() -> (Self, impl Iterator<Item = String>) {
+	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, impl Iterator<Item = String>) {
 		let mut flag_count = 0;
-		let flags = { // perform argument checks
-			let mut arguments = args()
-				.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
-				.peekable();
-			if let None = arguments.peek() { panic!("get the program arguments  no arguments given") }
-			arguments
-		}
+		let flags = iterator
+			.iter()
 			.map_while(|argument|
 				{
 					let flag = argument.strip_prefix('-')?;
@@ -386,7 +375,12 @@ impl Flags {
 		let mut flag_map = HashSet::with_capacity(flag_count);
 		for key in flags.chars() { flag_map.insert(key); }
 
-		(Self::from_map(flag_map), args().skip(flag_count + 1))
+		(
+			Self::from_map(flag_map),
+			iterator
+				.into_iter()
+				.skip(flag_count)
+		)
 	}
 }
 

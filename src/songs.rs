@@ -2,6 +2,7 @@
 use serde::Deserialize;
 use std::{
 	sync::Once,
+	thread::sleep,
 	io::{ BufReader, Seek, Write },
 	ops::{ Deref, DerefMut },
 	fs::{ File, read_to_string },
@@ -29,6 +30,7 @@ use fastrand::Rng;
 /// Global audio stream data.
 pub(crate) static mut FILES: Vec<MetaData> = Vec::new();
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#[cfg_attr(debug_assertions, derive(Debug))]
 #[derive(Deserialize)]
 /// A playlist with some metadata.
 pub(crate) struct Playlist {
@@ -37,6 +39,7 @@ pub(crate) struct Playlist {
 	time: Option<isize>,
 }
 
+#[cfg_attr(debug_assertions, derive(Debug))]
 #[derive(Deserialize)]
 #[derive(Clone)]
 /// A song path with aditional metadata.
@@ -116,12 +119,46 @@ impl Playlist {
 	/// The string is, before being loaded, passed into the [`fmt_path`] function.
 	///
 	/// [`Path`]: std::path::Path
-	pub(crate) fn try_from_path(path: String) -> Option<Self> {
-		match read_to_string(fmt_path(&path)).map(|contents| from_str(&contents)) {
-			Ok(Ok(playlist)) => Some(playlist),
-			Ok(Err(why)) => log!(err[path]: "parse the contents of [{path}]" => why; None?),
-			Err(why) => log!(err[path]: "load the contents of [{path}]" => why; None?),
+	pub(crate) fn try_from_contents((contents, path): (String, String)) -> Option<Self> {
+		match from_str(&contents) {
+			Ok(playlist) => Some(playlist),
+			Err(why) => log!(err[path]: "parsing [{path}]" => why; None?),
 		}
+	}
+
+	pub(crate) fn from_outliers(iterator: impl Iterator<Item = String>) -> (Self, Vec<(String, String)>) {
+		let mut rest = Vec::with_capacity(8);
+		(
+			iterator.fold(
+				Playlist {
+					name: None,
+					song: Vec::with_capacity(8),
+					time: None
+				},
+				|mut playlist, path|
+					{
+
+						match read_to_string(fmt_path(&path)) {
+							Ok(contents) => rest.push((contents, path)),
+							Err(why) => {
+								log!(err[path]: "loading [{path}]" => why);
+								let boxed = path.into_boxed_str();
+								playlist
+									.song
+									.push(
+										Track {
+											name: Some(boxed.clone()),
+											file: boxed,
+											time: None,
+										}
+									);
+							},
+						}
+						playlist
+					}
+			),
+			rest
+		)
 	}
 
 	/// Merge a list of [`Playlists`] into a single [`Playlist`].
@@ -233,20 +270,19 @@ impl Playlist {
 				(Ok(contents), Ok(info)) => {
 					startup_clear.call_once(|| map_files_mut(Vec::clear));
 					map_files_mut(|files|
-						files
-							.push(
-								MetaData {
-									stream: BufReader::new(contents),
-									duration: info
-										.properties()
-										.duration(),
-								}
-							)
+						files.push(
+							MetaData {
+								stream: BufReader::new(contents),
+								duration: info
+									.properties()
+									.duration(),
+							}
+						)
 					);
 				},
-				(Err(why), Ok(_)) => log!(err[name]: "load the audio contents of [{name}]" => why),
-				(Ok(_), Err(why)) => log!(err[name]: "load the audio properties of [{name}]" => why),
-				(Err(file_why), Err(info_why)) => log!(err[name]: "load the audio contents and properties of [{name}]" => file_why info_why),
+				(Err(why), Ok(_)) => log!(err[name]: "loading [{name}]" => why),
+				(Ok(_), Err(why)) => log!(err[name]: "loading [{name}]" => why),
+				(Err(file_why), Err(info_why)) => log!(err[name]: "loading [{name}]" => file_why info_why),
 			}
 		}
 	}
@@ -278,11 +314,8 @@ impl Playlist {
 
 			match bundle.play_file(get_file(old_songs_index)) {
 				Ok(playback) => 'song: {
-					let name = song.get_name();
-					log!(info[name]: "Playing back the audio contents of [{name}].");
-
-					let Some(controls) = controls else { break 'song song.play_headless(playback, &mut songs_index) };
-					match song.play(playback, &mut songs_index, controls, volume) {
+					let Some(controls) = controls else { break 'song song.play_headless(playback, &name, &mut songs_index, volume) };
+					match song.play(playback, &name, &mut songs_index, controls, volume) {
 						Instruction::Hold => { },
 						Instruction::Done => self.repeat_or_increment(lists_index),
 						Instruction::Next => {
@@ -296,10 +329,11 @@ impl Playlist {
 						Instruction::Exit => return true,
 					}
 				},
-				Err(why) => log!(err[name]: "playback [{name}] from the default audio output device" => why; return true), // assume error will occur on the other tracks too
+				Err(why) => log!(err[name]: "playing [{name}]" => why; return true), // assume error will occur on the other tracks too
 			}
-			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "reset the player's position inside of [{name}]" => why) }
+			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "rewinding [{name}]" => why) }
 		}
+		*lists_index -= (old_lists_index > 0) as usize;
 		false
 	}
 }
@@ -320,13 +354,32 @@ impl Track {
 	/// Play without a head.
 	///
 	/// This will severily impare one's ability to control the playback.
-	pub(crate) fn play_headless(&mut self, playback: Sink, songs_index: &mut usize) {
+	pub(crate) fn play_headless(&mut self, playback: Sink, playlist_name: &str, songs_index: &mut usize, volume: &mut f32)  {
+		let name = self.get_name();
+		playback.set_volume(volume.clamp(0.0, 2.0));
+
+		let mut elapsed = Duration::ZERO;
+		let duration = get_file(*songs_index).get_duration();
+
+		while elapsed <= duration {
+			print!("\r[{playlist_name}][{name}][{}][{volume:>5.2}]\0",
+				{
+					let seconds = elapsed.as_secs();
+					let minutes = seconds / 60;
+					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
+				}
+			);
+			if let Err(why) = stdout().flush() { log!(err: "flushing" => why) }
+
+			sleep(TICK);
+			elapsed += TICK
+		} 
 		self.repeat_or_increment(songs_index);
-		playback.sleep_until_end()
 	}
 
 	/// Play the track back.
-	pub(crate) fn play(&mut self, playback: Sink, songs_index: &mut usize, controls: &Controls, volume: &mut f32) -> Instruction {
+	pub(crate) fn play(&mut self, playback: Sink, playlist_name: &str, songs_index: &mut usize, controls: &Controls, volume: &mut f32) -> Instruction {
+		let name = self.get_name();
 		playback.set_volume(volume.clamp(0.0, 2.0));
 
 		let duration = get_file(*songs_index).get_duration();
@@ -335,14 +388,14 @@ impl Track {
 		while elapsed <= duration {
 			let paused = playback.is_paused();
 
-			print!("\r[{}][{volume:>5.2}]\0",
+			print!("\r[{playlist_name}][{name}][{}][{volume:>5.2}]\0",
 				{
 					let seconds = elapsed.as_secs();
 					let minutes = seconds / 60;
 					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 				}
 			);
-			if let Err(why) = stdout().flush() { log!(err: "flush the standard output" => why) }
+			if let Err(why) = stdout().flush() { log!(err: "flushing" => why) }
 
 			let now = Instant::now();
 			elapsed += match controls.receive_signal(now) {
@@ -353,8 +406,7 @@ impl Track {
 				Ok(Layer::Volume(signal)) => signal.manage(&playback, now, volume),
 
 				Err(RecvTimeoutError::Disconnected) => {
-					log!(err: "receive a signal from the control thread" => DISCONNECTED);
-					log!(info: "Exiting the program."); 
+					log!(err: "receiving control-thread" => DISCONNECTED);
 					return Instruction::Exit
 				}, // chain reaction will follow
 			}
