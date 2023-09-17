@@ -191,36 +191,24 @@ macro_rules! create_flags {
 use create_flags; // shitty workaround
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Bundle {
-	/// Convenience function for less repetition.
-	///
-	/// # Panics:
-	///
-	/// - An output device could not be determined. (refer to [`OutputStream's try_default`])
-	///
-	/// [`OutputStream's try_default`]: rodio::OutputStream::try_default
-	fn output_device() -> (OutputStream, OutputStreamHandle) {
-		rodio::OutputStream::try_default()
-			.unwrap_or_else(|why|
-				{
-					if let Err(why) = disable_raw_mode() { log!(err: "disabling raw-mode" => why) }
-					panic!("determine the default audio output device  {why}")
-				}
-			)
-	}
-
 	/// Create a new [`Bundle`].
 	///
 	/// [`new`] mainly differs from [`headless`] by it spawning a control-thread.
 	///
 	/// [`new`]: Self::new
 	/// [`headless`]: Self::headless
-	pub(crate) fn new() -> Self {
-		let sound_out = Self::output_device();
+	pub(crate) fn with(is_tty: bool) -> Self {
+		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why|
+			{
+				if let Err(why) = disable_raw_mode() { log!(err: "disabling raw-mode" => why) }
+				panic!("determine the default audio output device  {why}")
+			}
+		);
 
 		let (signal_sender, signal_receiver) = unbounded();
 		let (exit_notifier, exit_receiver) = unbounded();
 		let controls = 'controls: {
-			let Ok(_) = event::poll(TICK) else { break 'controls None };
+			if !is_tty { break 'controls None }
 
 			let Ok(control_thread) = Builder::new()
 				.name(String::from("Control"))
@@ -261,14 +249,6 @@ impl Bundle {
 		Self {
 			sound_out,
 			controls,
-		}
-	}
-
-	/// Initialise without a head.
-	pub(crate) fn headless() -> Self {
-		Self {
-			sound_out: Self::output_device(),
-			controls: None,
 		}
 	}
 

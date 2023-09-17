@@ -184,7 +184,7 @@ fn main() {
 		list.shuffle_song();
 		list.load_song();
 
-		let bundle = initialisable_bundle.get_or_init(|| if flags.should_spawn_headless() { Bundle::headless() } else { Bundle::new() });
+		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));
 
 		if list.is_empty() { list.repeat_or_increment(&mut lists_index) }
 
