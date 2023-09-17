@@ -17,6 +17,7 @@ use crate::{
 	log,
 	fmt_path,
 	stdout,
+	echo::clear,
 	in_out::{
 		Bundle,
 		Controls,
@@ -332,9 +333,18 @@ impl Playlist {
 				Err(why) => log!(err[name]: "playing [{name}]" => why; return true), // assume error will occur on the other tracks too
 			}
 			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "rewinding [{name}]" => why) }
+			clear()
 		}
-		*lists_index -= (old_lists_index > 0) as usize;
 		false
+	}
+
+	/// [`is_empty`] delegate
+	///
+	/// [`is_empty`]: Vec::is_empty
+	pub(crate) fn is_empty(&self) -> bool {
+		self
+			.song
+			.is_empty()
 	}
 }
 
@@ -360,6 +370,7 @@ impl Track {
 
 		let mut elapsed = Duration::ZERO;
 		let duration = get_file(*songs_index).get_duration();
+		self.repeat_or_increment(songs_index);
 
 		while elapsed <= duration {
 			print!("\r[{playlist_name}][{name}][{}][{volume:>5.2}]\0",
@@ -374,7 +385,6 @@ impl Track {
 			sleep(TICK);
 			elapsed += TICK
 		} 
-		self.repeat_or_increment(songs_index);
 	}
 
 	/// Play the track back.

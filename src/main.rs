@@ -150,7 +150,7 @@ fn main() {
 	};
 	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
 	let (flags, files) = Flags::separate_from(arguments);
-	if !flags.should_spawn_headless() || is_tty {
+	if !flags.should_spawn_headless() && is_tty {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
 		if let Err(why) = execute!(stdout(),
 			Hide,
@@ -186,7 +186,9 @@ fn main() {
 
 		let bundle = initialisable_bundle.get_or_init(|| if flags.should_spawn_headless() { Bundle::headless() } else { Bundle::new() });
 
-		if list.play(bundle, &mut lists_index, &mut volume) { break };
+		if list.is_empty() { list.repeat_or_increment(&mut lists_index) }
+
+		if list.play(bundle, &mut lists_index, &mut volume) { break }
 		clear()
 	}
 
