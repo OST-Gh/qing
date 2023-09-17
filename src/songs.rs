@@ -139,7 +139,7 @@ impl Playlist {
 				|mut playlist, path|
 					{
 
-						match read_to_string(fmt_path(&path)) {
+						match read_to_string(fmt_path(&path)) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
 							Ok(contents) => rest.push((contents, path)),
 							Err(why) => {
 								log!(err[path]: "loading [{path}]" => why);
