@@ -182,7 +182,19 @@ fn main() {
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
 		list.shuffle_song();
-		list.load_song();
+		if let Err((path, whys)) = list.load_song() {
+			let (file_why, info_why) = (
+				whys
+					.0
+					.map(move |why| format!("{why}"))
+					.unwrap_or_default(),
+				whys
+					.1
+					.map(move |why| format!("{why}"))
+					.unwrap_or_default(),
+			);
+			log!(err[path]: "loading [{path}]" => file_why info_why; break)
+		}
 
 		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));
 

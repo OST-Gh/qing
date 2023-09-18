@@ -3,7 +3,12 @@ use serde::Deserialize;
 use std::{
 	sync::Once,
 	thread::sleep,
-	io::{ BufReader, Seek, Write },
+	io::{
+		BufReader,
+		Error,
+		Seek,
+		Write,
+	},
 	ops::{ Deref, DerefMut },
 	fs::{ File, read_to_string },
 };
@@ -24,7 +29,11 @@ use crate::{
 		Layer,
 	},
 };
-use lofty::{ read_from_path, AudioFile };
+use lofty::{
+	read_from_path,
+	AudioFile,
+	LoftyError,
+};
 use toml::from_str;
 use fastrand::Rng;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -66,8 +75,6 @@ pub(crate) struct MetaData {
 pub(crate) enum Instruction {
 	/// Don't progress the playback index.
 	Hold,
-	/// The playback finished without any issues.
-	Done,
 	/// Manual skip to the next track.
 	Next,
 	/// Manual backwards skip to a previous track.
@@ -256,36 +263,42 @@ impl Playlist {
 	///
 	/// The function's output will be put into the global variable [`FILES`].\
 	/// This function also clears [`FILES`] when it successfully loads at least one [`Track`].
-	pub(crate) fn load_song(&self) {
+	pub(crate) fn load_song(&self) -> Result<(), (Box<str>, (Option<Error>, Option<LoftyError>))> {
 		let Self { song, .. } = self;
 
 		let startup_clear = Once::new();
 
 		for Track { name, file, .. } in song.iter() {
-			let name = name
-				.clone()
-				.unwrap_or_default();
 			let formatted = fmt_path(file);
 
-			match (File::open(&formatted), read_from_path(formatted)) {
-				(Ok(contents), Ok(info)) => {
-					startup_clear.call_once(|| map_files_mut(Vec::clear));
-					map_files_mut(|files|
-						files.push(
-							MetaData {
-								stream: BufReader::new(contents),
-								duration: info
-									.properties()
-									.duration(),
-							}
-						)
-					);
-				},
-				(Err(why), Ok(_)) => log!(err[name]: "loading [{name}]" => why),
-				(Ok(_), Err(why)) => log!(err[name]: "loading [{name}]" => why),
-				(Err(file_why), Err(info_why)) => log!(err[name]: "loading [{name}]" => file_why info_why),
-			}
+			Err(
+				(
+					name
+						.clone()
+						.unwrap_or_default(),
+					match (File::open(&formatted), read_from_path(formatted)) {
+						(Ok(contents), Ok(info)) => {
+							startup_clear.call_once(|| map_files_mut(Vec::clear));
+							map_files_mut(|files|
+								files.push(
+									MetaData {
+										stream: BufReader::new(contents),
+										duration: info
+											.properties()
+											.duration(),
+									}
+								)
+							);
+							continue
+						},
+						(Err(why), Ok(_)) => (Some(why), None),
+						(Ok(_), Err(why)) => (None, Some(why)),
+						(Err(file_why), Err(info_why)) => (Some(file_why), Some(info_why)),
+					}
+				)
+			)?
 		}
+		Ok(())
 	}
 
 	/// Play the entire list back.
@@ -318,7 +331,6 @@ impl Playlist {
 					let Some(controls) = controls else { break 'song song.play_headless(playback, &name, &mut songs_index, volume) };
 					match song.play(playback, &name, &mut songs_index, controls, volume) {
 						Instruction::Hold => { },
-						Instruction::Done => self.repeat_or_increment(lists_index),
 						Instruction::Next => {
 							*lists_index += 1;
 							return false
@@ -335,6 +347,7 @@ impl Playlist {
 			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "rewinding [{name}]" => why) }
 			clear()
 		}
+		self.repeat_or_increment(lists_index);
 		false
 	}
 
@@ -422,7 +435,7 @@ impl Track {
 			}
 		}
 		self.repeat_or_increment(songs_index);
-		Instruction::Done
+		Instruction::Hold
 	}
 }
 
