@@ -114,6 +114,12 @@ create_flags!{
 	/// Wether or not the program should output some information.
 	should_print_version = 'v'
 
+	/// Wether or not the file-playlist should repeat infinitely
+	should_repeat_playlist = 'p'
+
+	/// When present, will indicate that each file in the file-playlist should reoeat infinitely.
+	should_repeat_track = 't'
+
 	[IDENTIFIERS]
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -200,7 +206,7 @@ impl Bundle {
 	pub(crate) fn with(is_tty: bool) -> Self {
 		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why|
 			{
-				if let Err(why) = disable_raw_mode() { log!(err: "disabling raw-mode" => why) }
+				if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
 				panic!("determine the default audio output device  {why}")
 			}
 		);
@@ -221,7 +227,7 @@ impl Bundle {
 									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
 									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
 									'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(err: "sending a signal" => why) }
+										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(; "sending a signal" why) }
 										return
 									},
 
@@ -241,7 +247,7 @@ impl Bundle {
 						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
 					}
 				)
-				.map_err(|why| log!(err: "creating control-thread" => why)) else { break 'controls None };
+				.map_err(|why| log!(; "creating control-thread" why)) else { break 'controls None };
 
 			Some(Controls { control_thread, exit_notifier, signal_receiver })
 		};

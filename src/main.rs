@@ -60,14 +60,18 @@ const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
 ///
 /// [raw-mode]: crossterm::terminal#raw-mode
 macro_rules! log {
-	(err$([$($visible: ident)+])?: $message: literal => $($why: ident)+ $(; $($retaliation: tt)+)?) => {
+	($($value: expr),*; $message: literal $($why: ident)+ $(; $($retaliation: tt)+)?) => {
 		{
-			print!(concat!("\rError whilst ", $message, ';') $(, $($visible = $visible),+)?);
+			print!(
+				concat!("\rError whilst ", $message, ';')
+				$(, $value)*
+			);
 			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
 			print!("\n\0");
 			$($($retaliation)+)?
 		}
 	};
+
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Format a text representation of a path into an absolute path.
@@ -96,14 +100,14 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 					_ => return Some(String::from(part)),
 				} {
 					Ok(part) => Some(part),
-					Err(why) => log!(err[part]: "expanding [{part}] to a path" => why; None)
+					Err(why) => log!(part; "expanding [{}] to a path" why; None)
 				}
 			)
 			.collect::<Vec<String>>()
 			.join(MAIN_SEPARATOR_STR)
 	)
 		.canonicalize()
-		.unwrap_or_else(|why| log!(err[path]: "canonicalising [{path}]" => why; PathBuf::new()))
+		.unwrap_or_else(|why| log!(path; "canonicalising [{}]" why; PathBuf::new()))
 }
 
 fn main() {
@@ -129,7 +133,8 @@ fn main() {
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
 					.replace('\n', "\r\n");
 				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
-			exit();
+				exit();
+				if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
 			}
 		)
 	);
@@ -148,19 +153,21 @@ fn main() {
 				.map(String::from)
 		)
 	};
-	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
+	if let None = arguments.first() {
+		panic!("get the program arguments  no arguments given")
+	}
 	let (flags, files) = Flags::separate_from(arguments);
 	if !flags.should_spawn_headless() && is_tty {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
 		if let Err(why) = execute!(stdout(),
 			Hide,
 			SetForegroundColor(Color::Yellow),
-		) { log!(err: "setting the terminal style" => why) }
+		) { log!(; "setting the terminal style" why) }
 	}
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let (outlier, rest) = Playlist::from_outliers(files);
+	let (outlier, rest) = Playlist::from_outliers_with_flags(files, &flags);
 	let mut lists: Vec<Playlist> = rest
 		.into_iter()
 		.filter_map(|(contents, path)| Playlist::try_from_contents((contents, path)))
@@ -193,7 +200,7 @@ fn main() {
 					.map(move |why| format!("{why}"))
 					.unwrap_or_default(),
 			);
-			log!(err[path]: "loading [{path}]" => file_why info_why; break)
+			log!(path; "loading [{}]" file_why info_why; break)
 		}
 
 		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));

@@ -22,7 +22,7 @@ pub(crate) fn exit() {
 	if let Err(why) = execute!(stdout(),
 		Show,
 		SetForegroundColor(Color::Reset),
-	) { log!(err: "resetting the terminal style" => why) }
+	) { log!(; "resetting the terminal style" why) }
 	print!("\0")
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn clear() {
 	print!("\r");
 	if let Err(why) = execute!(stdout(),
 		Clear(ClearType::CurrentLine)
-	) { log!(err: "clearing the current line" => why) };
+	) { log!(; "clearing the current line" why) };
 	print!("\0")
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

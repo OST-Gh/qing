@@ -27,6 +27,7 @@ use crate::{
 		Bundle,
 		Controls,
 		Layer,
+		Flags,
 	},
 };
 use lofty::{
@@ -130,18 +131,26 @@ impl Playlist {
 	pub(crate) fn try_from_contents((contents, path): (String, String)) -> Option<Self> {
 		match from_str(&contents) {
 			Ok(playlist) => Some(playlist),
-			Err(why) => log!(err[path]: "parsing [{path}]" => why; None?),
+			Err(why) => log!(path; "parsing [{}]" why; None?),
 		}
 	}
 
-	pub(crate) fn from_outliers(iterator: impl Iterator<Item = String>) -> (Self, Vec<(String, String)>) {
+	/// Filter out [`Playlist`] [`files`] from audio [`files`].
+	///
+	/// [`files`]: std::fs::File
+	pub(crate) fn from_outliers_with_flags(iterator: impl Iterator<Item = String>, flags: &Flags) -> (Self, Vec<(String, String)>) {
 		let mut rest = Vec::with_capacity(8);
+		let time = flags
+			.should_repeat_track()
+			.then_some(-1);
 		(
 			iterator.fold(
 				Playlist {
 					name: None,
 					song: Vec::with_capacity(8),
-					time: None
+					time: flags
+						.should_repeat_playlist()
+						.then_some(-1)
 				},
 				|mut playlist, path|
 					{
@@ -149,7 +158,7 @@ impl Playlist {
 						match read_to_string(fmt_path(&path)) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
 							Ok(contents) => rest.push((contents, path)),
 							Err(why) => {
-								log!(err[path]: "loading [{path}]" => why);
+								log!(path; "loading [{}]" why);
 								let boxed = path.into_boxed_str();
 								playlist
 									.song
@@ -157,7 +166,7 @@ impl Playlist {
 										Track {
 											name: Some(boxed.clone()),
 											file: boxed,
-											time: None,
+											time,
 										}
 									);
 							},
@@ -342,9 +351,9 @@ impl Playlist {
 						Instruction::Exit => return true,
 					}
 				},
-				Err(why) => log!(err[name]: "playing [{name}]" => why; return true), // assume error will occur on the other tracks too
+				Err(why) => log!(name; "playing [{}]" why; return true), // assume error will occur on the other tracks too
 			}
-			if let Err(why) = get_file(old_songs_index).rewind() { log!(err[name]: "rewinding [{name}]" => why) }
+			if let Err(why) = get_file(old_songs_index).rewind() { log!(name; "rewinding [{}]" why) }
 			clear()
 		}
 		self.repeat_or_increment(lists_index);
@@ -393,7 +402,7 @@ impl Track {
 					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 				}
 			);
-			if let Err(why) = stdout().flush() { log!(err: "flushing" => why) }
+			if let Err(why) = stdout().flush() { log!(; "flushing" why) }
 
 			sleep(TICK);
 			elapsed += TICK
@@ -418,7 +427,7 @@ impl Track {
 					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 				}
 			);
-			if let Err(why) = stdout().flush() { log!(err: "flushing" => why) }
+			if let Err(why) = stdout().flush() { log!(; "flushing" why) }
 
 			let now = Instant::now();
 			elapsed += match controls.receive_signal(now) {
@@ -429,7 +438,7 @@ impl Track {
 				Ok(Layer::Volume(signal)) => signal.manage(&playback, now, volume),
 
 				Err(RecvTimeoutError::Disconnected) => {
-					log!(err: "receiving control-thread" => DISCONNECTED);
+					log!(; "receiving control-thread" DISCONNECTED);
 					return Instruction::Exit
 				}, // chain reaction will follow
 			}

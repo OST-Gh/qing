@@ -9,5 +9,6 @@ name = "Search for bugs"
 group = "global"
 
 [[todo]]
-name = "add is_terminal checks in without creating multiple functions nor if checks in the log macro"
+name = "Merge in_out and songs"
 group = "global"
+purpose = "lessen the file crossing imports"
