@@ -12,3 +12,15 @@ group = "global"
 name = "Merge in_out and songs"
 group = "global"
 purpose = "lessen the file crossing imports"
+
+[[todo]]
+name = "Create a help flag"
+group = "features"
+
+[[todo]]
+name = "create a token specialiser for Flags (eg: +nightly)"
+group = "features"
+
+[[todo]]
+name = "crate a long name flag part (idk how)"
+group = "features"
