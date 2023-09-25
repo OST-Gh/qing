@@ -17,7 +17,6 @@ use crossterm::event::{
 	KeyModifiers,
 };
 use std::{
-	collections::HashSet,
 	fs::File,
 	io::BufReader,
 	thread::{ Builder, JoinHandle },
@@ -111,16 +110,24 @@ create_flags!{
 	/// [`Playlists`]: crate::songs::Playlist
 	should_flatten = 'f'
 
-	/// Wether or not the program should output some information.
-	should_print_version = 'v'
-
 	/// Wether or not the file-playlist should repeat infinitely
 	should_repeat_playlist = 'p'
 
 	/// When present, will indicate that each file in the file-playlist should reoeat infinitely.
 	should_repeat_track = 't'
 
-	[IDENTIFIERS]
+	/// Wether or not the program should output some information.
+	should_print_version = 'v'
+
+	[self.const]
+	INUSE_IDENTIFIERS = [..]
+	SHIFT = 97
+	LENGTH = 26
+	CHECK = { |symbol| symbol.is_ascii_lowercase() && symbol.is_ascii_alphabetic() }
+
+	[self.as]
+	name = u32
+
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -165,32 +172,73 @@ pub(crate) enum Signal {
 #[macro_export]
 /// Macro that creates the [`Flags`] structure.
 macro_rules! create_flags {
-	($(#[$structure_attribute: meta])* [[$structure: ident]] $($(#[$field_attribute: meta])* $field: ident = $flag: literal)+ [$lone: ident]) => {
+	(
+		$(#[$structure_attribute: meta])*
+		[[$structure: ident]]
+		$(
+			$(#[$field_attribute: meta])*
+			$field: ident = $flag: literal
+		)+
+		[self.const]
+		$lone: ident = [..]
+		$shift: ident = $by: literal
+		$length: ident = $number: literal
+		$check: ident = { $($token: tt)+ }
+
+		[self.as]
+		name = $type: ty
+	) => {
 		$(#[$structure_attribute])*
-		pub(crate) struct $structure {
-			$(
-				$(#[$field_attribute])*
-				///
-				#[doc = concat!("Specify using '`-", $flag, "`'.")]
-				$field: bool
-			),+
-		}
+		pub(crate) struct $structure($type);
 
 		impl $structure {
 			/// A set made up of each flag identifier.
 			const $lone: [char; 0 $( + { $flag /* i hate this */; 1 })+] = [$($flag),+];
 
-			fn from_map(map: HashSet<char>) -> Self {
-				Self { $($field: map.contains(&$flag)),+ }
-			}
+			const $shift: $type = $by;
+			/// The length of the set that contain all possible single character flags.
+			const $length: $type = $number;
+
+			/// The current check that determines wether or not a character is valid.
+			const $check: fn(&char) -> bool = $($token)+;
+
+			#[inline(always)]
+			pub(crate) fn into_inner(self) -> $type { self.0 }
 
 			$(
-				#[doc = concat!("Refer to [`", stringify!($field), "`] for more information.")]
-				///
-				#[doc = concat!("[`", stringify!($field), "`]: Self#field.", stringify!($field))]
+				#[doc = concat!("Specify using '`-", $flag, "`'.")]
+				$(#[$field_attribute])*
 				// macro bullshit
-				pub(crate) fn $field(&self) -> bool { self.$field }
+				pub(crate) fn $field(&self) -> bool {
+					#[cfg(debug_assertions)] if !Self::$check(&$flag) { panic!("get a flag  NOT-ALPHA") }
+					**self >> Self::from($flag).into_inner() & 1 == 1 // bit hell:)
+					// One copy call needed (**)
+					// 0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+					//                         z   y   x   w   v   u   t   s   r   q   p   o   n   m   l   k   j   i   h   g   f   e   d   c   b   a
+					//                       122 121 120 119 118 117 116 115 114 113 112 111 110 109 108 107 106 105 104 103 102 101 100 099 098 097
+					//                       025 024 023 022 021 020 019 018 017 016 015 014 013 012 011 010 009 008 007 006 005 004 003 002 001 000
+				}
 			)+
+
+		}
+
+		impl From<char> for $structure {
+			fn from(symbol: char) -> Self {
+				#[cfg(debug_assertions)] if !Self::$check(&symbol) { panic!("get a flag  NOT-ALPHA") }
+				Self((symbol as u32 - Self::$shift) % Self::$length)
+			}
+		}
+
+		impl std::ops::Deref for $structure {
+			type Target = $type;
+
+			#[inline(always)]
+			fn deref(&self) -> &$type { &self.0 }
+		}
+
+		impl std::ops::DerefMut for $structure {
+			#[inline(always)]
+			fn deref_mut(&mut self) -> &mut $type { &mut self.0 }
 		}
 	};
 }
@@ -346,23 +394,30 @@ impl Flags {
 	/// - Arguments are empty.
 	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, impl Iterator<Item = String>) {
 		let mut flag_count = 0;
-		let flags = iterator
+		let bits = iterator
 			.iter()
 			.map_while(|argument|
 				{
-					let flag = argument.strip_prefix('-')?;
+					let raw = argument
+						.strip_prefix('-')?
+						.replace(|symbol| !Self::CHECK(&symbol), "");
 					flag_count += 1;
-					flag
-						.contains(Self::IDENTIFIERS)
-						.then(|| String::from(flag))
+					Some(raw)
 				}
 			)
-			.collect::<String>();
-		let mut flag_map = HashSet::with_capacity(flag_count);
-		for key in flags.chars() { flag_map.insert(key); }
-
+			.fold(
+				Self(0),
+				|mut bits, raw|
+				{
+					for symbol in raw
+						.chars()
+						.filter(|symbol| Self::INUSE_IDENTIFIERS.contains(symbol))
+					{ *bits |= 1 << Self::from(symbol).into_inner() }
+					bits
+				}
+			);
 		(
-			Self::from_map(flag_map),
+			bits,
 			iterator
 				.into_iter()
 				.skip(flag_count)
