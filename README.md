@@ -28,15 +28,15 @@ time = -1 # similar to playlist-level time, but for a single song.
 
 ## Controls:
 ```toml
-'n     ' = "skip one playlist forwards"
-'p     ' = "skip one playlist backwards"
-'ctrl_c' = "exit the program when in active playback"
-'     l' = "skip one track forwards"
-'     j' = "skip one track backwards"
-'     k' = "toggle the playback"
-'up    ' = "Increase the volume of the currently playing track"
-'down  ' = "Decrease the volume of the currently playing track"
-'m     ' = "Toggle the volume of the currently playing track"
+' ctrl_l' = "skip one playlist forwards"
+' ctrl_j' = "skip one playlist backwards"
+' ctrl_k' = "exit the program when in active playback"
+'      l' = "skip one track forwards"
+'      j' = "skip one track backwards"
+'      k' = "toggle the playback"
+'shift_l' = "Increase the volume of the currently playing track"
+'shift_j' = "Decrease the volume of the currently playing track"
+'shift_k' = "Toggle the volume of the currently playing track"
 ```
 
 ###### NOTE: all inputted playlists are loaded upon starting. all files of the playlist are loaded when it is its turn to play. the program will run in headless mode if the creation of the control thread fails.

@@ -4,34 +4,6 @@ use rodio::{
 	OutputStreamHandle,
 	PlayError,
 };
-use serde::Deserialize;
-use std::{
-	path::PathBuf,
-	io::{ BufReader, Write },
-	ops::{ Deref, DerefMut },
-	fs::{ File, read_to_string },
-	thread::{ JoinHandle, spawn },
-};
-use crate::{
-	TICK,
-	DISCONNECTED,
-	Duration,
-	Instant,
-	Sink,
-	RecvTimeoutError,
-	log,
-	fmt_path,
-	stdout,
-	echo::clear,
-	disable_raw_mode,
-};
-use lofty::{
-	read_from_path,
-	AudioFile,
-	LoftyError,
-};
-use toml::from_str;
-use fastrand::Rng;
 use crossbeam_channel::{
 	unbounded,
 	Sender,
@@ -44,51 +16,24 @@ use crossterm::event::{
 	KeyCode,
 	KeyModifiers,
 };
+use std::{
+	fs::File,
+	io::BufReader,
+	thread::{ Builder, JoinHandle },
+};
+use crate::{
+	TICK,
+	DISCONNECTED,
+	Sink,
+	Duration,
+	Instant,
+	RecvTimeoutError,
+	songs::Instruction,
+	log,
+	disable_raw_mode,
+	echo::clear,
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Global volume of every playback.
-pub(crate) static mut VOLUME: f32 = 1.0;
-// 1 + 2 * -1 = 1 - 2 = -1 
-// -1 + 2 * 1 = -1 + 2 = 1
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg_attr(debug_assertions, derive(Debug))]
-#[derive(Deserialize)]
-/// A playlist with some metadata.
-pub(crate) struct Playlist {
-	name: Option<Box<str>>,
-	song: Vec<Track>,
-	time: Option<isize>,
-}
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-#[derive(Deserialize)]
-#[derive(Clone)]
-/// A song path with aditional metadata.
-pub(crate) struct Track {
-	name: Option<Box<str>>,
-	file: Box<str>,
-	time: Option<isize>,
-}
-
-/// The final form of a [`Playlist`]
-pub(crate) struct UnwrappedPlaylist {
-	name: Box<str>,
-	repeats: isize,
-	tracks: Box<[UnwrappedTrack]>, // raw for static cast
-	track_index: usize,
-}
-
-/// The final form of a [`Playlist`]
-pub(crate) struct UnwrappedTrack {
-	name: Box<str>,
-	repeats: isize,
-	/// The path to a track's audio file.
-	file_path: PathBuf, // is raw for static cast
-	/// The exact [`Duration`] of a [`stream`]
-	///
-	/// [`stream`]: Self#field.stream
-	duration: Duration,
-}
-
 /// Bundled In- and Output constructs.
 ///
 /// The values, that the structure holds, will be initialised if the program successfully loads at least a single playlist.\
@@ -97,13 +42,13 @@ pub(crate) struct UnwrappedTrack {
 /// # Basic usage:
 ///
 /// ```rust
-/// # use std::cell::OnceCell;
-/// # use crate::in_out::Bundle;
-/// #
+///#use std::cell::OnceCell;
+///#use crate::in_out::Bundle;
+///
 /// let maybe_bundle = OnceCell::new();
 /// /* load stuff */
 ///
-/// let bundle = maybe_bundle.get_or_init(Bundle::new);
+/// let bundle = bundle.get_or_init(Bundle::new);
 /// /* do stuff */
 /// ```
 /// This example uses a [`OnceCell`].
@@ -125,9 +70,20 @@ pub(crate) struct Bundle {
 pub(crate) struct Controls {
 	control_thread: JoinHandle<()>,
 	exit_notifier: Sender<()>,
-	signal_receiver: Receiver<Signal>,
-	// unix_signal_receiver: 
+	signal_receiver: Receiver<Layer>,
 }
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with `CTRL` held down.
+pub(crate) struct Control(Signal);
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with nothing held down.
+pub(crate) struct Other(Signal);
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+/// [`Signal`] interpretation with `Shift` held down.
+pub(crate) struct Shift(Signal);
 
 create_flags!{
 	#[cfg_attr(debug_assertions, derive(Debug))]
@@ -142,7 +98,7 @@ create_flags!{
 	///
 	/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
 	///
-	/// [`program arguments`]: std::env::args
+	/// [`program arguments`]: args
 	/// [`character`]: char
 	[[Flags]]
 
@@ -151,7 +107,7 @@ create_flags!{
 
 	/// If the program should merge all given [`Playlists`] into one.
 	///
-	/// [`Playlists`]: Playlist
+	/// [`Playlists`]: crate::songs::Playlist
 	should_flatten = 'f'
 
 	/// Wether or not the file-playlist should repeat infinitely
@@ -175,53 +131,46 @@ create_flags!{
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
-/// An instruction that the [`play`] function of a [`Playlist`] uses to control itself.
-///
-/// [`play`]: Playlist::play
-pub(crate) enum Instruction {
-	/// Exit the program.
-	ExitQuit,
+/// High level control signal representation.
+pub(crate) enum Layer {
+	Playlist(Control),
+	// Toggle = ProgramExit.
+	// Increm = PlaylistNext.
+	// Decrem = PlaylistBack.
 
-	/// Manual skip to the next track.
-	NextNone,
-	/// Manual backwards skip to a previous track.
-	BackNone,
+	Track(Other),
+	// Toggle = PlaybackToggle,
+	// Increm = TrackNext,
+	// Decrem = TrackBack,
 
-	/// Manual skip to the next playlist.
-	NextNext,
-	/// Manual backwards skip to a previous playlist.
-	BackBack,
-	/// Manual instruction to not progress the track pointer.
-	HoldNoop,
+	Volume(Shift),
+	// Toggle = VolumeIncrease,
+	// Increm = VolumeDecrease,
+	// Decrem = VolumeToggle,
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
-/// The main controls.
+/// The three main controls.
+///
+/// A signal can be interpreted alone, but then some meaning would be lost.\
+/// See: [`Control`], [`Other`] and [`Shift`].
 pub(crate) enum Signal {
+	/// Move up within something, usually a manipulate a number.
+	///
 	/// Corresponds to: `l`.
-	TrackNext,
+	Increment,
+	/// Move down within something, usually a manipulate a number.
+	///
 	/// Corresponds to: `j`.
-	TrackBack,
+	Decrement,
+	/// Toggle something, or perform some kind of special action.
+	///
 	/// Corresponds to: `k`.
-	Play,
-
-	/// Corresponds to: `N` (`n` + `shift`).
-	PlaylistNext,
-	/// Corresponds to: `P` (`p` + `shift`).
-	PlaylistBack,
-	/// Corresponds to: `k`.
-	Exit,
-
-	/// Corresponds to: `up` (up arrow).
-	VolumeIncrease,
-	/// Corresponds to: `down` (down arrow).
-	VolumeDecrease,
-	/// Corresponds to: `m`.
-	Mute,
+	Toggle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
-/// Macro that creates a 32-bit flag structure.
+/// Macro that creates the [`Flags`] structure.
 macro_rules! create_flags {
 	(
 		$(#[$structure_attribute: meta])*
@@ -230,9 +179,8 @@ macro_rules! create_flags {
 			$(#[$field_attribute: meta])*
 			$field: ident = $flag: literal
 		)+
-
 		[self.const]
-		$set: ident = [..]
+		$lone: ident = [..]
 		$shift: ident = $by: literal
 		$length: ident = $number: literal
 		$check: ident = { $($token: tt)+ }
@@ -245,7 +193,7 @@ macro_rules! create_flags {
 
 		impl $structure {
 			/// A set made up of each flag identifier.
-			const $set: [char; 0 $( + { $flag /* i hate this */; 1 })+] = [$($flag),+];
+			const $lone: [char; 0 $( + { $flag /* i hate this */; 1 })+] = [$($flag),+];
 
 			const $shift: $type = $by;
 			/// The length of the set that contain all possible single character flags.
@@ -265,8 +213,6 @@ macro_rules! create_flags {
 					#[cfg(debug_assertions)] if !Self::$check(&$flag) { panic!("get a flag  NOT-ALPHA") }
 					**self >> Self::from($flag).into_inner() & 1 == 1 // bit hell:)
 					// One copy call needed (**)
-					//
-					// Six bits unallocated, but twenty six used.
 					// 0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
 					//                         z   y   x   w   v   u   t   s   r   q   p   o   n   m   l   k   j   i   h   g   f   e   d   c   b   a
 					//                       122 121 120 119 118 117 116 115 114 113 112 111 110 109 108 107 106 105 104 103 102 101 100 099 098 097
@@ -276,383 +222,35 @@ macro_rules! create_flags {
 
 		}
 
+		impl From<char> for $structure {
+			fn from(symbol: char) -> Self {
+				#[cfg(debug_assertions)] if !Self::$check(&symbol) { panic!("get a flag  NOT-ALPHA") }
+				Self((symbol as u32 - Self::$shift) % Self::$length)
+			}
+		}
+
+		impl std::ops::Deref for $structure {
+			type Target = $type;
+
+			#[inline(always)]
+			fn deref(&self) -> &$type { &self.0 }
+		}
+
+		impl std::ops::DerefMut for $structure {
+			#[inline(always)]
+			fn deref_mut(&mut self) -> &mut $type { &mut self.0 }
+		}
 	};
 }
 use create_flags; // shitty workaround
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Implementation utility function for getting a [`Track`]'s or [`Playlist`]'s name.
-fn name_from(optional: &Option<Box<str>>) -> Box<str> {
-	match optional {
-		Some(name) => name.clone(),
-		None => unsafe { Box::from_raw("Untitled" as *const str as *mut str) },
-	}
-}
-
-// /// Apply a function to a mutable reference of [`FILES`].
-// ///
-// /// # Panics:
-// ///
-// /// - If the function being executed panics.
-// pub(crate) fn map_files_mut<O>(function: impl FnOnce(&mut Vec<MetaData>) -> O) -> O {
-// 	unsafe { function(&mut FILES) }
-// }
-
-// /// Get the file at the given index.
-// ///
-// /// # Fails:
-// ///
-// /// - The function does not panic, but it does not guarrante that the index is inside the bounds of the global variable ([`FILES`]).
-// pub(crate) fn get_file(index: usize) -> &'static mut MetaData {
-// 	unsafe { FILES.get_unchecked_mut(index) }
-// }
-
-/// Copy the volume [`VOLUME`] currently holds.
-pub(crate) fn get_volume() -> f32 { unsafe { VOLUME }.clamp(0.0, 2.0) }
-
-/// Change the volume [`VOLUME`] holds.
-pub(crate) fn set_volume<F>(mut new: F)
-where
-	F: FnMut(f32) -> f32,
-{ unsafe { VOLUME = new(VOLUME).clamp(-1.0, 2.0) } } 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-impl Playlist {
-	/// Load a [`Playlist`] from a [`Path`] represented as a [`String`].
-	///
-	/// The string is, before being loaded, passed into the [`fmt_path`] function.
-	///
-	/// [`Path`]: std::path::Path
-	pub(crate) fn try_from_contents(contents: String, path: String) -> Option<Self> {
-		match from_str(&contents) {
-			Ok(playlist) => Some(playlist),
-			Err(why) => log!(path; "parsing [{}]" why; None?),
-		}
-	}
-
-	/// Filter out [`Playlist`] [`files`] from audio [`files`].
-	///
-	/// [`files`]: std::fs::File
-	pub(crate) fn from_paths_with_flags(iterator: impl Iterator<Item = String>, flags: &Flags) -> Vec<Self> {
-		let mut lists = Vec::with_capacity(8);
-		let time = flags
-			.should_repeat_track()
-			.then_some(-1);
-		let outliers = iterator.fold(
-			Playlist {
-				name: None,
-				song: Vec::with_capacity(8),
-				time: flags
-					.should_repeat_playlist()
-					.then_some(-1)
-			},
-			|mut playlist, path|
-			match read_to_string(fmt_path(&path)) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
-				Ok(contents) => {
-					if let Some(new_playlist) = Self::try_from_contents(contents, path) { lists.push(new_playlist) }
-					playlist
-				},
-				Err(why) => {
-					log!(path; "loading [{}]" why);
-					let boxed = path.into_boxed_str();
-					playlist
-						.song
-						.push(
-							Track {
-								name: Some(boxed.clone()),
-								file: boxed,
-								time,
-							}
-						);
-					playlist
-				},
-			}
-		);
-		if !outliers.is_empty() { lists.push(outliers) }
-		if flags.should_flatten() { lists = vec![Playlist::flatten(lists)] }
-		lists
-	}
-
-	/// Merge a list of [`Playlists`] into a single [`Playlist`].
-	///
-	/// [`Playlists`]: Playlist
-	pub(crate) fn flatten(lists: Vec<Self>) -> Self {
-		let mut new_name = Vec::with_capacity(lists.len());
-
-		let repeats = {
-			let iterator = lists.iter();
-			let minimum = iterator
-				.clone()
-				.min_by_key(|list|
-					list
-						.time
-						.unwrap_or_default()
-				)
-				.expect("search for an infinity repeation  Empty Vector")
-				.time
-				.unwrap_or_default();
-			if minimum < 0 { minimum } else {
-				iterator
-					.max_by_key(|list|
-						list
-							.time
-							.unwrap_or_default()
-					)
-					.expect("search for the highest repeat count  Empty Vector")
-					.time
-					.unwrap_or_default()
-			}
-		};
-
-		let tracks: Vec<Track> = lists
-			.into_iter()
-			.map(|list|
-				{
-					let name = String::from(list.name());
-					new_name.push(name);
-					list
-						.song
-						.into_iter()
-				}
-			)
-			.flatten()
-			.collect();
-
-		Self {
-			name: Some(
-				new_name
-					.join(" & ")
-					.into_boxed_str()
-			),
-			song: tracks,
-			time: Some(repeats),
-		}
-	}
-
-	/// Get the name of the passed in [`Playlist`].
-	///
-	/// If the playlist's name is set to [`None`], the function will return the [`string slice`] `"Untitled"`.
-	///
-	/// [`string slice`]: str
-	pub(crate) fn name(&self) -> Box<str> { name_from(&self.name) }
-
-	/// Perform an in-place item shuffle on the [`Playlist`]'s [`Tracks`].
-	///
-	/// [`Tracks`]: Track
-	pub(crate) fn shuffle_song(&mut self) {
-		let mut generator = Rng::new();
-
-		let songs = &mut self.song;
-		let length = songs.len();
-
-		for value in 0..length {
-			let index = value % length;
-			songs.swap(index, generator.usize(0..=index));
-			songs.swap(index, generator.usize(index..length));
-			// a b c; b inclusive in both random ranges
-			// b a c
-			// b c a
-		}
-	}
-
-	/// [`is_empty`] delegate
-	///
-	/// [`is_empty`]: Vec::is_empty
-	pub(crate) fn is_empty(&self) -> bool {
-		self
-			.song
-			.is_empty()
-	}
-}
-
-impl UnwrappedPlaylist {
-	pub(crate) fn play(&mut self, bundle: &Bundle) -> Option<Instruction> {
-		let old = self.track_index;
-		let length = self
-			.tracks
-			.len();
-
-		while self.repeats != 0 {
-			while self.track_index < length {
-				let track = unsafe {
-					self
-						.tracks
-						.get_unchecked_mut(old)
-				};
-				match track.play(&self.name, bundle) {
-					Some(Instruction::BackNone) => self.track_index -= (self.track_index > 0) as usize,
-					Some(Instruction::NextNone) => self.track_index += 1,
-					Some(Instruction::HoldNoop) => { },
-					Some(handled_by_outer) => return Some(handled_by_outer),
-					None => if track.repeats != 0 {
-						track.repeats -= 1;
-						continue
-					} else { self.track_index += 1 },
-				}
-			}
-			if self.repeats != 0 {
-				self.repeats -= 1;
-				continue
-			}
-		}
-		None
-	}
-
-	/// [`is_empty`] delegate
-	///
-	/// [`is_empty`]: Vec::is_empty
-	pub(crate) fn is_empty(&self) -> bool {
-		self
-			.tracks
-			.is_empty()
-	}
-}
-
-impl TryFrom<&Playlist> for UnwrappedPlaylist {
-	type Error = (Box<str>, LoftyError);
-
-	/// Load each [`Track`]'s duration and stream.
-	///
-	/// The function's output will be put into the global variable [`FILES`].\
-	/// This function also clears [`FILES`] when it successfully loads at least one [`Track`].
-	fn try_from(playlist: &Playlist) -> Result<Self, Self::Error> {
-		let repeats = playlist
-			.time
-			.unwrap_or_default();
-		let name = playlist.name();
-		Ok(
-			Self {
-				name,
-				repeats,
-				tracks: playlist
-					.song
-					.iter()
-					.map(UnwrappedTrack::try_from)
-					.collect::<Result<Vec<UnwrappedTrack>, Self::Error>>()?
-					.into_boxed_slice(),
-				track_index: 0,
-			}
-		)
-	}
-}
-
-impl Track {
-	/// Get the name of the passed in [`Track`].
-	///
-	/// If the playlist's name is set to [`None`], the function will return the [`string slice`] `"Untitled"`.
-	///
-	/// [`string slice`]: str
-	pub(crate) fn name(&self) -> Box<str> { name_from(&self.name) }
-}
-
-impl UnwrappedTrack {
-	pub(crate) fn play(&mut self, playlist_name: &Box<str>, bundle: &Bundle) -> Option<Instruction> {
-		let handle = match bundle.play_file(self.open()) {
-			Ok(playback) => playback,
-			Err(why) => log!(self.name; "starting to play [{}]" why; return Some(Instruction::NextNone)),
-		};
-		handle.set_volume(get_volume());
-		let Some(controls) = bundle.get_controls() else {
-			handle.sleep_until_end();
-			None?
-		};
-
-		let mut elapsed = Duration::ZERO;
-
-		while elapsed <= self.duration {
-			let paused = handle.is_paused();
-
-			print!("\r[{playlist_name}][{}][{}][{:>5.2}]\0",
-				self.name,
-				{
-					let seconds = elapsed.as_secs();
-					let minutes = seconds / 60;
-					format!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
-				},
-				get_volume(),
-			);
-			if let Err(why) = stdout().flush() { log!(; "flushing" why) }
-
-			let now = Instant::now(); // if pc's closed does still count??
-			let under_threshhold = elapsed <= Duration::from_secs(2);
-			let is_paused = handle.is_paused();
-			let update_volume = |setter: fn(f32) -> f32|
-			{
-				set_volume(setter);
-				handle.set_volume(get_volume());
-				now.elapsed()
-			};
-			elapsed += match controls.receive_signal(now) {
-				Err(RecvTimeoutError::Timeout) => if paused { continue } else { TICK },
-				Ok(Signal::PlaylistNext) => return Some(Instruction::NextNext),
-				Ok(Signal::PlaylistBack) => if under_threshhold { return Some(Instruction::BackBack) } else { return Some(Instruction::HoldNoop) },
-				Ok(Signal::Exit) => {
-					clear();
-					return Some(Instruction::ExitQuit)
-				},
-
-				Ok(Signal::TrackNext) => return Some(Instruction::NextNone),
-				Ok(Signal::TrackBack) => if under_threshhold { return Some(Instruction::BackNone) } else { return Some(Instruction::HoldNoop) }
-				Ok(Signal::Play) => {
-					if is_paused { handle.play() } else { handle.pause() }
-					now.elapsed()
-				},
-
-				Ok(_) if is_paused => { continue }, // guard against updating volume whilst paused
-				Ok(Signal::VolumeIncrease) => update_volume(|old| old + 0.05),
-				Ok(Signal::VolumeDecrease) => update_volume(|old| old - 0.05),
-				Ok(Signal::Mute) => update_volume(|old| old + 2.0 * -old),
-
-				Err(RecvTimeoutError::Disconnected) => {
-					log!(; "receiving control-thread" DISCONNECTED);
-					return Some(Instruction::ExitQuit)
-				}, // chain reaction will follow
-			}
-		}
-		None
-	}
-
-	/// Assumes the file from the [`try_from`] call still is at the same location, and opens it.
-	pub(crate) fn open(&self) -> BufReader<File> { BufReader::new(File::open(&self.file_path).unwrap()) }
-}
-
-
-impl TryFrom<&Track> for UnwrappedTrack {
-	type Error = (Box<str>, LoftyError);
-	
-	fn try_from(track: &Track) -> Result<Self, Self::Error> {
-		let repeats = track
-			.time
-			.unwrap_or_default();
-		let name = track.name();
-		
-		let file_path = fmt_path(&track.file);
-
-		let duration = match read_from_path(&file_path) {
-			Ok(info) => info
-				.properties()
-				.duration(),
-			Err(lofty_error) => return Err((name, lofty_error)),
-		};
-
-		Ok(
-			Self {
-				name,
-				repeats,
-				file_path,
-				duration,
-			}
-		)
-	}
-}
-
 impl Bundle {
 	/// Create a new [`Bundle`].
 	///
-	/// # Input value beased behavior:
+	/// [`new`] mainly differs from [`headless`] by it spawning a control-thread.
 	///
-	/// - [`true`]: Spawns the control thread without checking if it should or not.
-	/// - [`false`]: [`true`]'s opposite, it does not spawn it.
-	///
-	/// [`with`]: Self::with
+	/// [`new`]: Self::new
+	/// [`headless`]: Self::headless
 	pub(crate) fn with(is_tty: bool) -> Self {
 		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why|
 			{
@@ -663,38 +261,48 @@ impl Bundle {
 
 		let (signal_sender, signal_receiver) = unbounded();
 		let (exit_notifier, exit_receiver) = unbounded();
+		let controls = 'controls: {
+			if !is_tty { break 'controls None }
+
+			let Ok(control_thread) = Builder::new()
+				.name(String::from("Control"))
+				.spawn(move ||
+					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
+						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => {
+								match code {
+									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
+									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
+									'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
+										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(; "sending a signal" why) }
+										return
+									},
+
+									'l' => Layer::Track(Other(Signal::Increment)),
+									'j' => Layer::Track(Other(Signal::Decrement)),
+									'k' => Layer::Track(Other(Signal::Toggle)),
+
+									'L' => Layer::Volume(Shift(Signal::Increment)),
+									'J' => Layer::Volume(Shift(Signal::Decrement)),
+									'K' => Layer::Volume(Shift(Signal::Toggle)),
+
+									_ => continue,
+								}
+							}
+							_ => continue,
+						};
+						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+					}
+				)
+				.map_err(|why| log!(; "creating control-thread" why)) else { break 'controls None };
+
+			Some(Controls { control_thread, exit_notifier, signal_receiver })
+		};
 
 		Self {
 			sound_out,
-			controls: is_tty.then_some(
-				Controls {
-					control_thread: spawn(move ||
-						while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-							if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-							let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-								Event::Key(KeyEvent { code: KeyCode::Char('n' | 'N'), .. }) => Signal::PlaylistNext,
-								Event::Key(KeyEvent { code: KeyCode::Char('p' | 'P'), .. }) => Signal::PlaylistBack,
-								Event::Key(KeyEvent { code: KeyCode::Char('c' | 'C'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { log!(; "sending a signal" why) },
-								Event::Key(KeyEvent { code: KeyCode::Esc, ..  }) => return if let Err(why) = signal_sender.send(Signal::Exit) { log!(; "sending a signal" why) },
-
-								Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L') | KeyCode::Right, .. }) => Signal::TrackNext,
-								Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J') | KeyCode::Left, .. }) => Signal::TrackBack,
-								Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K' | ' '), .. }) => Signal::Play,
-
-								Event::Key(KeyEvent { code: KeyCode::Char('m' | 'M'), .. }) => Signal::Mute,
-								Event::Key(KeyEvent { code: KeyCode::Up, .. }) => Signal::VolumeIncrease,
-								Event::Key(KeyEvent { code: KeyCode::Down, .. }) => Signal::VolumeDecrease,
-
-								Event::FocusGained | Event::FocusLost => Signal::Play,
-								_ => continue,
-							};
-							if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
-						}
-					),
-					exit_notifier,
-					signal_receiver,
-				}
-			),
+			controls,
 		}
 	}
 
@@ -712,7 +320,7 @@ impl Bundle {
 	}
 
 	/// Play a single file.
-	pub(crate) fn play_file(&self, song: BufReader<File>) -> Result<Sink, PlayError> {
+	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
 		self
 			.sound_out
 			.1
@@ -728,8 +336,8 @@ impl Controls {
 	/// # Basic usage:
 	///
 	/// ```rust
-	/// # use crate::in_out::Bundle;
-	/// #
+	///#use crate::in_out::Bundle;
+	///
 	/// let bundle = Bundle::new();
 	/// /* do stuff */
 	///
@@ -754,8 +362,8 @@ impl Controls {
 	/// # Basig usage:
 	///
 	/// ```rust
-	/// # use crate::in_out::Bundle;
-	/// #
+	///#use crate::in_out::Bundle;
+	///
 	/// let bundle = Bundle::new();
 	/// /* do stuff */
 	///
@@ -770,8 +378,8 @@ impl Controls {
 			.send(());
 	}
 
-	/// Try to receive a signal by waiting for it for a set amount of time.
-	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
+	/// Try to receive a signal, by waiting for it for a set amount of time.
+	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Layer, RecvTimeoutError> {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
@@ -817,22 +425,54 @@ impl Flags {
 	}
 }
 
-impl From<char> for Flags {
-	fn from(symbol: char) -> Self {
-		#[cfg(debug_assertions)] if !Self::CHECK(&symbol) { panic!("get a flag  NOT-ALPHA") }
-		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
+impl Control {
+	/// Manage the playlist's playback or program.
+	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
+		match self.0 {
+			Signal::Increment => Instruction::Next,
+			Signal::Decrement => if elapsed <= Duration::from_secs(1) { return Instruction::Back } else { return Instruction::Hold },
+			Signal::Toggle => {
+				clear();
+				Instruction::Exit
+			},
+		}
 	}
 }
 
-impl Deref for Flags {
-	type Target = u32;
+impl Other {
+	/// Manage the track's playback.
+	/// 
+	/// # Values:
+	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Instruction`].
+	/// - [`false`]: It signifies the exact opposite.
+	///
+	/// [`Hold`]: crate::songs::Instruction::Hold
+	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
+		match self.0 {
+			Signal::Increment => *songs_index += 1,
+			Signal::Decrement => *songs_index -= (songs_index > &mut 0 && elapsed <= Duration::from_secs(1)) as usize,
 
-	#[inline(always)]
-	fn deref(&self) -> &u32 { &self.0 }
+			Signal::Toggle => {
+				if playback.is_paused() { playback.play() } else { playback.pause() }
+				return false
+			},
+		}
+		true
+	}
 }
 
-impl DerefMut for Flags {
-	#[inline(always)]
-	fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
+impl Shift {
+	/// Manage the program's volume.
+	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
+		match self.0 {
+			Signal::Increment => *volume += 0.05,
+			Signal::Decrement => *volume -= 0.05,
+			Signal::Toggle => *volume += 2.0 * -*volume,
+		}
+		*volume = volume.clamp(-1.0, 2.0);
+		playback.set_volume(volume.clamp(0.0, 2.0));
+		if playback.is_paused() { return Duration::ZERO }
+		now.elapsed()
+	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
