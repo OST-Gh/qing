@@ -6,13 +6,13 @@
 //! - A [`Track`]
 //! - A [`Playlist`] (grouping of [`Tracks`], with additional data)
 //!
-//! [`Track`]: songs::Track
-//! [`Tracks`]: songs::Track
+//! [`Track`]: in_out::Track
+//! [`Tracks`]: in_out::Track
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
-	panic,
 	cell::OnceCell,
 	env::args,
+	panic::{ self, PanicInfo },
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
 	env::{ VarError, var },
@@ -21,7 +21,7 @@ use std::{
 use crossterm::{
 	cursor::Hide,
 	execute,
-	tty::IsTty,
+	tty::IsTty, // io::IsTerminal?
 	terminal::{ enable_raw_mode, disable_raw_mode },
 	style::{
 		SetForegroundColor,
@@ -30,18 +30,21 @@ use crossterm::{
 };
 use crossbeam_channel::RecvTimeoutError;
 use rodio::Sink;
-use in_out::{ Bundle, Flags };
+use in_out::{
+	Bundle,
+	Flags,
+	Playlist,
+	UnwrappedPlaylist,
+	Instruction,
+};
 use echo::{ exit, clear };
-use songs::Playlist;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
+/// A collection of file related structures, or implementations.
 mod in_out;
 
 /// A collection of functions that are used repeatedly to display certain sequences.
 mod echo;
-
-/// A collection of file related structures, or implementations.
-mod songs;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Constant signal [`Duration`] (tick rate). [250 milliseconds]
 ///
@@ -110,34 +113,32 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(path; "canonicalising [{}]" why; PathBuf::new()))
 }
 
-fn main() {
-	panic::set_hook(
-		Box::new(|info|
-			unsafe {
-				let payload = info.payload();
-				let panic = payload
-					.downcast_ref::<&str>()
-					.map(|slice| String::from(*slice))
-					.xor(
-						payload
-							.downcast_ref::<String>()
-							.map(String::from)
-					)
-					.unwrap();
-				let panic = panic
-					.splitn(2, "  ")
-					.collect::<Vec<&str>>();
-				let message = panic.get_unchecked(0);
-				let reason = panic
-					.get(1)
-					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
-					.replace('\n', "\r\n");
-				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
-				exit();
-				if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
-			}
+fn panic_handle(info: &PanicInfo) {
+	let payload = info.payload();
+	let panic = payload
+		.downcast_ref::<&str>()
+		.map(|slice| String::from(*slice))
+		.xor(
+			payload
+				.downcast_ref::<String>()
+				.map(String::from)
 		)
-	);
+		.unwrap();
+	let panic = panic
+		.splitn(2, "  ")
+		.collect::<Vec<&str>>();
+	let message = unsafe { panic.get_unchecked(0) };
+	let reason = panic
+		.get(1)
+		.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
+		.replace('\n', "\r\n");
+	print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
+	exit();
+	if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
+}
+
+fn main() {
+	panic::set_hook(Box::new(panic_handle));
 
 	let is_tty = stdin().is_tty();
 	let mut arguments: Vec<String> = args()
@@ -153,9 +154,7 @@ fn main() {
 				.map(String::from)
 		)
 	};
-	if let None = arguments.first() {
-		panic!("get the program arguments  no arguments given")
-	}
+	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
 	let (flags, files) = Flags::separate_from(arguments);
 	if !flags.should_spawn_headless() && is_tty {
 		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
@@ -167,20 +166,8 @@ fn main() {
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let (outlier, rest) = Playlist::from_outliers_with_flags(files, &flags);
-	let mut lists: Vec<Playlist> = rest
-		.into_iter()
-		.filter_map(|(contents, path)| Playlist::try_from_contents((contents, path)))
-		.collect();
-	lists.push(outlier);
-
-	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)] }
-
+	let mut lists = Playlist::from_paths_with_flags(files, &flags);
 	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
-
-	let mut volume = 1.0;
-	// 1 + 2 * -1 = 1 - 2 = -1 
-	// -1 + 2 * 1 = -1 + 2 = 1
 
 	let lists_length = lists.len();
 	let mut lists_index = 0;
@@ -189,25 +176,20 @@ fn main() {
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
 		list.shuffle_song();
-		if let Err((path, whys)) = list.load_song() {
-			let (file_why, info_why) = (
-				whys
-					.0
-					.map(move |why| format!("{why}"))
-					.unwrap_or_default(),
-				whys
-					.1
-					.map(move |why| format!("{why}"))
-					.unwrap_or_default(),
-			);
-			log!(path; "loading [{}]" file_why info_why; break)
-		}
+		let mut list = match UnwrappedPlaylist::try_from(&*list) {
+			Ok(unwrapped) => unwrapped,
+			Err((path, why)) => log!(path; "loading [{}]" why; break),
+		};
 
 		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));
 
-		if list.is_empty() { list.repeat_or_increment(&mut lists_index) }
-
-		if list.play(bundle, &mut lists_index, &mut volume) { break }
+		if list.is_empty() { lists_index += 1 }
+		match list.play(bundle) {
+			Some(Instruction::ExitQuit) => break,
+			Some(Instruction::NextNext) => lists_index += 1,
+			Some(Instruction::BackBack) => lists_index -= (lists_index > 0) as usize,
+			_ => { /* handled by play itself */ },
+		}
 		clear()
 	}
 
