@@ -5,7 +5,7 @@ use rodio::{
 	PlayError,
 };
 use crossbeam_channel::{
-	unbounded,
+	self as channel,
 	Sender,
 	Receiver,
 };
@@ -19,7 +19,8 @@ use crossterm::event::{
 use std::{
 	fs::File,
 	io::BufReader,
-	thread::{ Builder, JoinHandle },
+	thread::{ self, JoinHandle },
+	ops::{ Deref, DerefMut },
 };
 use crate::{
 	TICK,
@@ -30,8 +31,7 @@ use crate::{
 	RecvTimeoutError,
 	songs::Instruction,
 	log,
-	disable_raw_mode,
-	echo::clear,
+	clear,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Bundled In- and Output constructs.
@@ -70,20 +70,8 @@ pub(crate) struct Bundle {
 pub(crate) struct Controls {
 	control_thread: JoinHandle<()>,
 	exit_notifier: Sender<()>,
-	signal_receiver: Receiver<Layer>,
+	signal_receiver: Receiver<Signal>,
 }
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-/// [`Signal`] interpretation with `CTRL` held down.
-pub(crate) struct Control(Signal);
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-/// [`Signal`] interpretation with nothing held down.
-pub(crate) struct Other(Signal);
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-/// [`Signal`] interpretation with `Shift` held down.
-pub(crate) struct Shift(Signal);
 
 create_flags!{
 	#[cfg_attr(debug_assertions, derive(Debug))]
@@ -98,7 +86,7 @@ create_flags!{
 	///
 	/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
 	///
-	/// [`program arguments`]: args
+	/// [`program arguments`]: std::env::args
 	/// [`character`]: char
 	[[Flags]]
 
@@ -119,98 +107,63 @@ create_flags!{
 	/// Wether or not the program should output some information.
 	should_print_version = 'v'
 
-	[self.const]
+	[const]
+	/// A set made up of each flag identifier.
 	INUSE_IDENTIFIERS = [..]
-	SHIFT = 97
+	/// The starting position of the allowed ASCII character range.
+	SHIFT = 97 // minimum position in ascii
+	/// The length of the set that contain all possible single character flags.
 	LENGTH = 26
-	CHECK = { |symbol| symbol.is_ascii_lowercase() && symbol.is_ascii_alphabetic() }
-
-	[self.as]
-	name = u32
-
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
 /// High level control signal representation.
-pub(crate) enum Layer {
-	Playlist(Control),
-	// Toggle = ProgramExit.
-	// Increm = PlaylistNext.
-	// Decrem = PlaylistBack.
-
-	Track(Other),
-	// Toggle = PlaybackToggle,
-	// Increm = TrackNext,
-	// Decrem = TrackBack,
-
-	Volume(Shift),
-	// Toggle = VolumeIncrease,
-	// Increm = VolumeDecrease,
-	// Decrem = VolumeToggle,
-}
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-/// The three main controls.
-///
-/// A signal can be interpreted alone, but then some meaning would be lost.\
-/// See: [`Control`], [`Other`] and [`Shift`].
 pub(crate) enum Signal {
-	/// Move up within something, usually a manipulate a number.
-	///
-	/// Corresponds to: `l`.
-	Increment,
-	/// Move down within something, usually a manipulate a number.
-	///
-	/// Corresponds to: `j`.
-	Decrement,
-	/// Toggle something, or perform some kind of special action.
-	///
-	/// Corresponds to: `k`.
-	Toggle,
+	PlaylistNext,
+	PlaylistBack,
+	Exit,
+
+	TrackNext,
+	TrackBack,
+	Play,
+
+	VolumeIncrease,
+	VolumeDecrease,
+	Mute,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#[macro_export]
+macro_rules! count {
+	($thing: expr) => { 1 };
+	($($thing: expr),* $(,)?) => { 0 $(+ $crate::count!($thing))* };
+}
+use count; // shitty workaround
+
 #[macro_export]
 /// Macro that creates the [`Flags`] structure.
 macro_rules! create_flags {
 	(
-		$(#[$structure_attribute: meta])*
-		[[$structure: ident]]
-		$(
-			$(#[$field_attribute: meta])*
-			$field: ident = $flag: literal
-		)+
-		[self.const]
-		$lone: ident = [..]
-		$shift: ident = $by: literal
-		$length: ident = $number: literal
-		$check: ident = { $($token: tt)+ }
+		$(#[$structure_attribute: meta])* [[$structure: ident]]
+		$($(#[$field_attribute: meta])* $field: ident = $flag: literal)+
 
-		[self.as]
-		name = $type: ty
+		[const]
+		$(#[$lone_attribute: meta])* $lone: ident = [..]
+		$(#[$shift_attribute: meta])* $shift: ident = $by: literal
+		$(#[$length_attribute: meta])* $length: ident = $number: literal
 	) => {
 		$(#[$structure_attribute])*
-		pub(crate) struct $structure($type);
+		pub(crate) struct $structure(u32);
 
 		impl $structure {
-			/// A set made up of each flag identifier.
-			const $lone: [char; 0 $( + { $flag /* i hate this */; 1 })+] = [$($flag),+];
-
-			const $shift: $type = $by;
-			/// The length of the set that contain all possible single character flags.
-			const $length: $type = $number;
-
-			/// The current check that determines wether or not a character is valid.
-			const $check: fn(&char) -> bool = $($token)+;
-
-			#[inline(always)]
-			pub(crate) fn into_inner(self) -> $type { self.0 }
-
+			$(#[$lone_attribute])* const $lone: [char; count!($($flag),+)] = [$($flag),+];
+			$(#[$shift_attribute])* const $shift: u32 = $by;
+			$(#[$length_attribute])* const $length: u32 = $number;
 			$(
 				#[doc = concat!("Specify using '`-", $flag, "`'.")]
 				$(#[$field_attribute])*
 				// macro bullshit
 				pub(crate) fn $field(&self) -> bool {
-					#[cfg(debug_assertions)] if !Self::$check(&$flag) { panic!("get a flag  NOT-ALPHA") }
+					#[cfg(debug_assertions)] if !flag_check(&$flag) { panic!("get a flag  NOT-ALPHA") }
 					**self >> Self::from($flag).into_inner() & 1 == 1 // bit hell:)
 					// One copy call needed (**)
 					// 0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
@@ -222,83 +175,49 @@ macro_rules! create_flags {
 
 		}
 
-		impl From<char> for $structure {
-			fn from(symbol: char) -> Self {
-				#[cfg(debug_assertions)] if !Self::$check(&symbol) { panic!("get a flag  NOT-ALPHA") }
-				Self((symbol as u32 - Self::$shift) % Self::$length)
-			}
-		}
-
-		impl std::ops::Deref for $structure {
-			type Target = $type;
-
-			#[inline(always)]
-			fn deref(&self) -> &$type { &self.0 }
-		}
-
-		impl std::ops::DerefMut for $structure {
-			#[inline(always)]
-			fn deref_mut(&mut self) -> &mut $type { &mut self.0 }
-		}
 	};
 }
 use create_flags; // shitty workaround
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// The current check that determines wether or not a character is valid.
+fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Bundle {
-	/// Create a new [`Bundle`].
-	///
-	/// [`new`] mainly differs from [`headless`] by it spawning a control-thread.
-	///
-	/// [`new`]: Self::new
-	/// [`headless`]: Self::headless
+	/// Create a new [`Bundle`] with an optional control-thread.
 	pub(crate) fn with(is_tty: bool) -> Self {
-		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why|
+		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why| panic!("determine the default audio output device  {why}"));
+
+		let controls = is_tty.then(||
 			{
-				if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
-				panic!("determine the default audio output device  {why}")
+				let (signal_sender, signal_receiver) = channel::unbounded();
+				let (exit_notifier, exit_receiver) = channel::unbounded();
+				Controls {
+					control_thread: thread::spawn(move ||
+						while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
+							if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+							let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+								Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+								Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+								Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { log!(; "sending a signal" why) },
+
+								Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
+								Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
+								Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
+
+								Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
+								Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
+								Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
+
+								_ => continue,
+							};
+							if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+						}
+					),
+					exit_notifier,
+					signal_receiver,
+				}
 			}
 		);
-
-		let (signal_sender, signal_receiver) = unbounded();
-		let (exit_notifier, exit_receiver) = unbounded();
-		let controls = 'controls: {
-			if !is_tty { break 'controls None }
-
-			let Ok(control_thread) = Builder::new()
-				.name(String::from("Control"))
-				.spawn(move ||
-					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-							Event::Key(KeyEvent { code: KeyCode::Char(code), modifiers, .. }) => {
-								match code {
-									'l' | 'L' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Increment)),
-									'j' | 'J' if modifiers.contains(KeyModifiers::CONTROL) => Layer::Playlist(Control(Signal::Decrement)),
-									'k' | 'k' if modifiers.contains(KeyModifiers::CONTROL) => {
-										if let Err(why) = signal_sender.send(Layer::Playlist(Control(Signal::Toggle))) { log!(; "sending a signal" why) }
-										return
-									},
-
-									'l' => Layer::Track(Other(Signal::Increment)),
-									'j' => Layer::Track(Other(Signal::Decrement)),
-									'k' => Layer::Track(Other(Signal::Toggle)),
-
-									'L' => Layer::Volume(Shift(Signal::Increment)),
-									'J' => Layer::Volume(Shift(Signal::Decrement)),
-									'K' => Layer::Volume(Shift(Signal::Toggle)),
-
-									_ => continue,
-								}
-							}
-							_ => continue,
-						};
-						if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
-					}
-				)
-				.map_err(|why| log!(; "creating control-thread" why)) else { break 'controls None };
-
-			Some(Controls { control_thread, exit_notifier, signal_receiver })
-		};
 
 		Self {
 			sound_out,
@@ -314,10 +233,7 @@ impl Bundle {
 	}
 
 	/// Take the underlying controls.
-	pub(crate) fn take_controls(self) -> Option<Controls> {
-		self
-			.controls
-	}
+	pub(crate) fn take_controls(self) -> Option<Controls> { self.controls }
 
 	/// Play a single file.
 	pub(crate) fn play_file(&self, song: &'static mut BufReader<File>) -> Result<Sink, PlayError> {
@@ -379,7 +295,7 @@ impl Controls {
 	}
 
 	/// Try to receive a signal, by waiting for it for a set amount of time.
-	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Layer, RecvTimeoutError> {
+	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
@@ -387,6 +303,10 @@ impl Controls {
 }
 
 impl Flags {
+	#[inline(always)]
+	/// Get the underlying unsigned integer.
+	pub(crate) fn into_inner(self) -> u32 { self.0 }
+
 	/// Split the program arguments into files and flags.
 	///
 	/// # Panics:
@@ -400,7 +320,7 @@ impl Flags {
 				{
 					let raw = argument
 						.strip_prefix('-')?
-						.replace(|symbol| !Self::CHECK(&symbol), "");
+						.replace(|symbol| !flag_check(&symbol), "");
 					flag_count += 1;
 					Some(raw)
 				}
@@ -425,54 +345,72 @@ impl Flags {
 	}
 }
 
-impl Control {
-	/// Manage the playlist's playback or program.
-	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
-		match self.0 {
-			Signal::Increment => Instruction::Next,
-			Signal::Decrement => if elapsed <= Duration::from_secs(1) { return Instruction::Back } else { return Instruction::Hold },
-			Signal::Toggle => {
-				clear();
-				Instruction::Exit
-			},
-		}
+impl From<char> for Flags {
+	fn from(symbol: char) -> Self {
+		#[cfg(debug_assertions)] if !flag_check(&symbol) { panic!("get a flag  NOT-ALPHA") }
+		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
 	}
 }
 
-impl Other {
-	/// Manage the track's playback.
-	/// 
-	/// # Values:
-	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Instruction`].
-	/// - [`false`]: It signifies the exact opposite.
-	///
-	/// [`Hold`]: crate::songs::Instruction::Hold
-	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
-		match self.0 {
-			Signal::Increment => *songs_index += 1,
-			Signal::Decrement => *songs_index -= (songs_index > &mut 0 && elapsed <= Duration::from_secs(1)) as usize,
+impl Deref for Flags {
+	type Target = u32;
 
-			Signal::Toggle => {
-				if playback.is_paused() { playback.play() } else { playback.pause() }
-				return false
-			},
-		}
-		true
-	}
+	#[inline(always)]
+	fn deref(&self) -> &u32 { &self.0 }
 }
 
-impl Shift {
-	/// Manage the program's volume.
-	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
-		match self.0 {
-			Signal::Increment => *volume += 0.05,
-			Signal::Decrement => *volume -= 0.05,
-			Signal::Toggle => *volume += 2.0 * -*volume,
-		}
-		*volume = volume.clamp(-1.0, 2.0);
-		playback.set_volume(volume.clamp(0.0, 2.0));
-		if playback.is_paused() { return Duration::ZERO }
-		now.elapsed()
-	}
+impl DerefMut for Flags {
+	#[inline(always)]
+	fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
 }
+// impl Control {
+// 	/// Manage the playlist's playback or program.
+// 	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
+// 		match self.0 {
+// 			Signal::Increment => Instruction::Next,
+// 			Signal::Decrement => if elapsed <= Duration::from_secs(1) { return Instruction::Back } else { return Instruction::Hold },
+// 			Signal::Toggle => {
+// 				clear();
+// 				Instruction::Exit
+// 			},
+// 		}
+// 	}
+// }
+
+// impl Other {
+// 	/// Manage the track's playback.
+// 	/// 
+// 	/// # Values:
+// 	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Instruction`].
+// 	/// - [`false`]: It signifies the exact opposite.
+// 	///
+// 	/// [`Hold`]: crate::songs::Instruction::Hold
+// 	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
+// 		match self.0 {
+// 			Signal::Increment => *songs_index += 1,
+// 			Signal::Decrement => *songs_index -= (*songs_index > 0 && elapsed <= Duration::from_secs(1)) as usize,
+
+// 			Signal::Toggle => {
+// 				if playback.is_paused() { playback.play() } else { playback.pause() }
+// 				return false
+// 			},
+// 		}
+// 		true
+// 	}
+// }
+
+// impl Shift {
+// 	/// Manage the program's volume.
+// 	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
+// 		match self.0 {
+// 			Signal::Increment => *volume += 0.05,
+// 			Signal::Decrement => *volume -= 0.05,
+// 			Signal::Toggle => *volume += 2.0 * -*volume,
+// 		}
+// 		*volume = volume.clamp(-1.0, 2.0);
+// 		playback.set_volume(volume.clamp(0.0, 2.0));
+// 		if playback.is_paused() { return Duration::ZERO }
+// 		now.elapsed()
+// 	}
+// }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

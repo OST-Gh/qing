@@ -19,26 +19,20 @@ use std::{
 	io::{ stdout, stdin, BufRead },
 };
 use crossterm::{
-	cursor::Hide,
 	execute,
 	tty::IsTty,
-	terminal::{ enable_raw_mode, disable_raw_mode },
-	style::{
-		SetForegroundColor,
-		Color,
+	terminal::{
+		Clear,
+		ClearType,
 	},
 };
 use crossbeam_channel::RecvTimeoutError;
 use rodio::Sink;
 use in_out::{ Bundle, Flags };
-use echo::{ exit, clear };
 use songs::Playlist;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 mod in_out;
-
-/// A collection of functions that are used repeatedly to display certain sequences.
-mod echo;
 
 /// A collection of file related structures, or implementations.
 mod songs;
@@ -51,7 +45,7 @@ const TICK: Duration = Duration::from_millis(250);
 ///
 /// [`Sender`]: crossbeam_channel::Sender
 /// [`Receiver`]: crossbeam_channel::Receiver
-const DISCONNECTED: &'static str = "DISCONNECTED CHANNEL";
+const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
 /// A macro for general interaction with Standard-Out.
@@ -66,8 +60,8 @@ macro_rules! log {
 				concat!("\rError whilst ", $message, ';')
 				$(, $value)*
 			);
-			$(print!(" '{}'", format!("{}", $why).replace('\n', "\r\n"));)+
-			print!("\n\0");
+			$(print!(" '{}'", $why);)+
+			print!("\n");
 			$($($retaliation)+)?
 		}
 	};
@@ -110,6 +104,13 @@ fn fmt_path(path: impl AsRef<str>) -> PathBuf {
 		.unwrap_or_else(|why| log!(path; "canonicalising [{}]" why; PathBuf::new()))
 }
 
+/// Print the clear line sequence.
+///
+/// Printable part: `\r{}\n\n\0`
+pub(crate) fn clear() {
+	if let Err(why) = execute!(stdout(), Clear(ClearType::CurrentLine)) { log!(; "clearing the current line" why) };
+}
+
 fn main() {
 	panic::set_hook(
 		Box::new(|info|
@@ -130,11 +131,8 @@ fn main() {
 				let message = panic.get_unchecked(0);
 				let reason = panic
 					.get(1)
-					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION")
-					.replace('\n', "\r\n");
-				print!("\rAn error occurred whilst attempting to {message}; '{reason}'\n\0");
-				exit();
-				if let Err(why) = disable_raw_mode() { log!(; "disabling raw-mode" why) }
+					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
+				println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
 			}
 		)
 	);
@@ -157,24 +155,10 @@ fn main() {
 		panic!("get the program arguments  no arguments given")
 	}
 	let (flags, files) = Flags::separate_from(arguments);
-	if !flags.should_spawn_headless() && is_tty {
-		if let Err(why) = enable_raw_mode() { panic!("enable the raw mode of the current terminal  {why}") }
-		if let Err(why) = execute!(stdout(),
-			Hide,
-			SetForegroundColor(Color::Yellow),
-		) { log!(; "setting the terminal style" why) }
-	}
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let (outlier, rest) = Playlist::from_outliers_with_flags(files, &flags);
-	let mut lists: Vec<Playlist> = rest
-		.into_iter()
-		.filter_map(|(contents, path)| Playlist::try_from_contents((contents, path)))
-		.collect();
-	lists.push(outlier);
-
-	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)] }
+	let lists = Playlist::from_paths_with_flags(files, &flags);
 
 	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
 
@@ -219,9 +203,5 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
-	if !flags.should_spawn_headless() {
-		if let Err(why) = disable_raw_mode() { panic!("disable the raw mode of the current terminal  {why}") }
-	}
-	exit()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

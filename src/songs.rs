@@ -22,11 +22,11 @@ use crate::{
 	log,
 	fmt_path,
 	stdout,
-	echo::clear,
+	clear,
 	in_out::{
 		Bundle,
 		Controls,
-		Layer,
+		Signal,
 		Flags,
 	},
 };
@@ -40,6 +40,8 @@ use fastrand::Rng;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Global audio stream data.
 pub(crate) static mut FILES: Vec<MetaData> = Vec::new();
+
+// static mut VOLUME: f32 = 1.0;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
 #[derive(Deserialize)]
@@ -96,12 +98,10 @@ fn decrement_or_increment(decremented: &mut Option<isize>, incremented: &mut usi
 }
 
 /// Implementation utility function for getting a [`Track`]'s or [`Playlist`]'s name.
-fn name_from(optional: &Option<Box<str>>) -> String {
-	String::from(
-		optional
-			.as_ref()
-			.map_or("Untitled", |name| name)
-	)
+fn name_from(optional: &Option<Box<str>>) -> &str {
+	optional
+		.as_ref()
+		.map_or("Untitled", |name| name)
 }
 
 /// Apply a function to a mutable reference of [`FILES`].
@@ -123,27 +123,15 @@ pub(crate) fn get_file(index: usize) -> &'static mut MetaData {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Playlist {
-	/// Load a [`Playlist`] from a [`Path`] represented as a [`String`].
-	///
-	/// The string is, before being loaded, passed into the [`fmt_path`] function.
-	///
-	/// [`Path`]: std::path::Path
-	pub(crate) fn try_from_contents((contents, path): (String, String)) -> Option<Self> {
-		match from_str(&contents) {
-			Ok(playlist) => Some(playlist),
-			Err(why) => log!(path; "parsing [{}]" why; None?),
-		}
-	}
-
 	/// Filter out [`Playlist`] [`files`] from audio [`files`].
 	///
 	/// [`files`]: std::fs::File
-	pub(crate) fn from_outliers_with_flags(iterator: impl Iterator<Item = String>, flags: &Flags) -> (Self, Vec<(String, String)>) {
+	pub(crate) fn from_paths_with_flags(iterator: impl Iterator<Item = String>, flags: &Flags) -> Vec<Self> {
 		let mut rest = Vec::with_capacity(8);
 		let time = flags
 			.should_repeat_track()
 			.then_some(-1);
-		(
+		rest.push(
 			iterator.fold(
 				Playlist {
 					name: None,
@@ -153,29 +141,36 @@ impl Playlist {
 						.then_some(-1)
 				},
 				|mut playlist, path|
-					{
-
-						match read_to_string(fmt_path(&path)) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
-							Ok(contents) => rest.push((contents, path)),
-							Err(why) => {
-								log!(path; "loading [{}]" why);
-								let boxed = path.into_boxed_str();
-								playlist
-									.song
-									.push(
-										Track {
-											name: Some(boxed.clone()),
-											file: boxed,
-											time,
-										}
-									);
-							},
-						}
+				match read_to_string(fmt_path(&path)) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
+					Ok(contents) => {
+						let Some(new_list) = Self::try_from_contents(contents, path) else { return playlist };
+						rest.push(new_list);
 						playlist
-					}
-			),
-			rest
-		)
+					},
+					Err(why) => {
+						log!(path; "loading [{}]" why);
+						let boxed = path.into_boxed_str();
+						playlist
+							.song
+							.push(
+								Track {
+									name: Some(boxed.clone()),
+									file: boxed,
+									time,
+								}
+							);
+						playlist
+					},
+				}
+			)
+		);
+		for (index, list) in rest
+			.iter()
+			.enumerate()
+		{
+			if list.is_empty() { rest.remove(index); }
+		}
+		if flags.should_flatten() { vec![Playlist::flatten(rest)] } else { rest }
 	}
 
 	/// Merge a list of [`Playlists`] into a single [`Playlist`].
@@ -189,9 +184,9 @@ impl Playlist {
 			let minimum = iterator
 				.clone()
 				.min_by_key(|list|
-						list
-							.time
-							.unwrap_or_default()
+					list
+						.time
+						.unwrap_or_default()
 				)
 				.expect("search for an infinity repeation  Empty Vector")
 				.time
@@ -239,7 +234,7 @@ impl Playlist {
 	/// If the playlist's name is set to [`None`], the function will return the [`string slice`] `"Untitled"`.
 	///
 	/// [`string slice`]: str
-	pub(crate) fn get_name(&self) -> String { name_from(&self.name) }
+	pub(crate) fn get_name(&self) -> &str { name_from(&self.name) }
 
 	/// Perform an in-place item shuffle on the [`Playlist`]'s [`Tracks`].
 	///
@@ -264,9 +259,7 @@ impl Playlist {
 	/// Used for index based [`Playlist`] playback.
 	///
 	/// The function should be used so as to advance the playback.
-	pub(crate) fn repeat_or_increment(&mut self, index: &mut usize) {
-		decrement_or_increment(&mut self.time, index);
-	}
+	pub(crate) fn repeat_or_increment(&mut self, index: &mut usize) { decrement_or_increment(&mut self.time, index) }
 
 	/// Load each [`Track`]'s duration and stream.
 	///
@@ -368,6 +361,18 @@ impl Playlist {
 			.song
 			.is_empty()
 	}
+
+	/// Load a [`Playlist`] from a [`Path`] represented as a [`String`].
+	///
+	/// The string is, before being loaded, passed into the [`fmt_path`] function.
+	///
+	/// [`Path`]: std::path::Path
+	fn try_from_contents(contents: String, path: String) -> Option<Self> {
+		match from_str(&contents) {
+			Ok(playlist) => Some(playlist),
+			Err(why) => log!(path; "parsing [{}]" why; None?),
+		}
+	}
 }
 
 impl Track {
@@ -376,7 +381,7 @@ impl Track {
 	/// If the playlist's name is set to [`None`], the function will return the [`string slice`] `"Untitled"`.
 	///
 	/// [`string slice`]: str
-	pub(crate) fn get_name(&self) -> String { name_from(&self.name) }
+	pub(crate) fn get_name(&self) -> &str { name_from(&self.name) }
 
 	/// Used for index based [`Track`] playback.
 	///
