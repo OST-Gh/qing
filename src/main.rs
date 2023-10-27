@@ -15,37 +15,76 @@ use std::{
 	env::args,
 	path::{ MAIN_SEPARATOR_STR, PathBuf },
 	time::{ Duration, Instant },
+	ops::{ Deref, DerefMut },
 	env::{ VarError, var },
-	io::{ stdout, stdin, BufRead },
+	io::{
+		stdout,
+		stdin,
+		Error as IoError,
+		BufRead,
+		IsTerminal,
+	},
 };
 use crossterm::{
 	execute,
-	tty::IsTty,
 	terminal::{
 		Clear,
 		ClearType,
 	},
 };
+use lofty::LoftyError;
 use crossbeam_channel::RecvTimeoutError;
-use rodio::Sink;
-use in_out::{ Bundle, Flags };
-use songs::Playlist;
+use rodio::{
+	Sink,
+	PlayError,
+	decoder::DecoderError,
+};
+use quing::Error;
+use quing::in_out::Bundle;
+use quing::songs::Playlist;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// A module for handling and interacting with external devices.
-mod in_out;
+create_flags!{
+	#[cfg_attr(debug_assertions, derive(Debug))]
+	/// A flag bundle.
+	///
+	/// This structure is used to partially parse the passed in [`program arguments`] for further use.
+	///
+	/// The position of flags can only directly be after the executable path (e.g.: //usr/local/bin/quing).\
+	/// This' made to be that way, due to the fact that the arguments, after the flags, could all be considered file names.\
+	/// Flags can be merged, meaning that one does not need to specify multiple separate flags, for example: `quing -h -f`, is instead, `quing -hf`.\
+	/// Flag ordering does not matter.
+	///
+	/// See the associated constants on [`Flags`] for which [`character`] identifies which flag.
+	///
+	/// [`program arguments`]: std::env::args
+	/// [`character`]: char
+	[[Flags]]
 
-/// A collection of file related structures, or implementations.
-mod songs;
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Constant signal [`Duration`] (tick rate). [250 milliseconds]
-///
-/// Every time related operation is tackted after this constant.\
-const TICK: Duration = Duration::from_millis(250);
-/// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
-///
-/// [`Sender`]: crossbeam_channel::Sender
-/// [`Receiver`]: crossbeam_channel::Receiver
-const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
+	/// Wether if the program should create a control-thread, or not.
+	should_spawn_headless = 'h'
+
+	/// If the program should merge all given [`Playlists`] into one.
+	///
+	/// [`Playlists`]: crate::songs::Playlist
+	should_flatten = 'f'
+
+	/// Wether or not the file-playlist should repeat infinitely
+	should_repeat_playlist = 'p'
+
+	/// When present, will indicate that each file in the file-playlist should reoeat infinitely.
+	should_repeat_track = 't'
+
+	/// Wether or not the program should output some information.
+	should_print_version = 'v'
+
+	[const]
+	/// A set made up of each flag identifier.
+	INUSE_IDENTIFIERS = [..]
+	/// The starting position of the allowed ASCII character range.
+	SHIFT = 97 // minimum position in ascii
+	/// The length of the set that contain all possible single character flags.
+	LENGTH = 26
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[macro_export]
 /// A macro for general interaction with Standard-Out.
@@ -67,51 +106,56 @@ macro_rules! log {
 	};
 
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Format a text representation of a path into an absolute path.
-///
-/// This recursive function is used for unexpanded shell(zsh based) expressions, on a call site, and songs' file fields.
-/// It can currently only expand environment variables, which might recurs.
-fn fmt_path(path: impl AsRef<str>) -> PathBuf {
-	fn expand(name: &str) -> Result<String, VarError> {
-		let mut buffer = Vec::new();
-		for part in var(if name.starts_with('$') { expand(&name[1..])? } else { String::from(name) })?
-			.split(MAIN_SEPARATOR_STR)
-			.map(|part| if part.starts_with('$') { expand(&part[1..]) } else { Ok(String::from(part)) })
-		{ buffer.push(part?) }
-		Ok(buffer.join(MAIN_SEPARATOR_STR))
-	}
 
-	let path = path.as_ref();
-	PathBuf::from(
-		path
-			.split(MAIN_SEPARATOR_STR)
-			.enumerate()
-			.filter_map(|(index, part)|
-				match match part {
-					"~" if index == 0 => expand("HOME"),
-					_ if part.starts_with('$') => expand(&part[1..]),
-					_ => return Some(String::from(part)),
-				} {
-					Ok(part) => Some(part),
-					Err(why) => log!(part; "expanding [{}] to a path" why; None)
+#[macro_export]
+macro_rules! count {
+	($thing: expr) => { 1 };
+	($($thing: expr),* $(,)?) => { 0 $(+ $crate::count!($thing))* };
+}
+
+#[macro_export]
+/// Macro that creates the [`Flags`] structure.
+macro_rules! create_flags {
+	(
+		$(#[$structure_attribute: meta])* [[$structure: ident]]
+		$($(#[$field_attribute: meta])* $field: ident = $flag: literal)+
+
+		[const]
+		$(#[$lone_attribute: meta])* $lone: ident = [..]
+		$(#[$shift_attribute: meta])* $shift: ident = $by: literal
+		$(#[$length_attribute: meta])* $length: ident = $number: literal
+	) => {
+		$(#[$structure_attribute])*
+		pub(crate) struct $structure(u32);
+
+		impl $structure {
+			$(#[$lone_attribute])* const $lone: [char; count!($($flag),+)] = [$($flag),+];
+			$(#[$shift_attribute])* const $shift: u32 = $by;
+			$(#[$length_attribute])* const $length: u32 = $number;
+			$(
+				#[doc = concat!("Specify using '`-", $flag, "`'.")]
+				$(#[$field_attribute])*
+				// macro bullshit
+				pub(crate) fn $field(&self) -> bool {
+					#[cfg(debug_assertions)] if !flag_check(&$flag) { panic!("get a flag  NOT-ALPHA") }
+					**self >> Self::from($flag).into_inner() & 1 == 1 // bit hell:)
+					// One copy call needed (**)
+					// 0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+					//                         z   y   x   w   v   u   t   s   r   q   p   o   n   m   l   k   j   i   h   g   f   e   d   c   b   a
+					//                       122 121 120 119 118 117 116 115 114 113 112 111 110 109 108 107 106 105 104 103 102 101 100 099 098 097
+					//                       025 024 023 022 021 020 019 018 017 016 015 014 013 012 011 010 009 008 007 006 005 004 003 002 001 000
 				}
-			)
-			.collect::<Vec<String>>()
-			.join(MAIN_SEPARATOR_STR)
-	)
-		.canonicalize()
-		.unwrap_or_else(|why| log!(path; "canonicalising [{}]" why; PathBuf::new()))
+			)+
+
+		}
+
+	};
 }
 
-/// Print the clear line sequence.
-///
-/// Printable part: `\r{}\n\n\0`
-pub(crate) fn clear() {
-	if let Err(why) = execute!(stdout(), Clear(ClearType::CurrentLine)) { log!(; "clearing the current line" why) };
-}
-
-fn main() {
+/// The current check that determines wether or not a character is valid.
+fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn main() -> Result<(), Error> {
 	panic::set_hook(
 		Box::new(|info|
 			unsafe {
@@ -137,7 +181,7 @@ fn main() {
 		)
 	);
 
-	let is_tty = stdin().is_tty();
+	let is_tty = stdin().is_terminal();
 	let mut arguments: Vec<String> = args()
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
@@ -158,7 +202,19 @@ fn main() {
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let lists = Playlist::from_paths_with_flags(files, &flags);
+	let mut lists: Vec<Playlist> = Playlist::try_from_paths(files)?;
+	if flags.should_repeat_track() {
+		let mut last = lists
+			.last_mut()
+			.map_or(Err(Error::EmptyVector), Ok)?;
+		if flags.should_repeat_playlist() { last.set_time(-1) }
+		if flags.should_repeat_track() {
+			for track in last
+				.get_song_mut()
+				.iter_mut()
+			{ track.set_time(-1) }
+		}
+	}
 
 	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
 
@@ -173,19 +229,7 @@ fn main() {
 		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
 
 		list.shuffle_song();
-		if let Err((path, whys)) = list.load_song() {
-			let (file_why, info_why) = (
-				whys
-					.0
-					.map(move |why| format!("{why}"))
-					.unwrap_or_default(),
-				whys
-					.1
-					.map(move |why| format!("{why}"))
-					.unwrap_or_default(),
-			);
-			log!(path; "loading [{}]" file_why info_why; break)
-		}
+		if let Err(why) = list.load_song() { log!(path; "loading [{}]" why; break) }
 
 		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));
 
@@ -203,5 +247,68 @@ fn main() {
 		controls.notify_exit();
 		controls.clean_up();
 	}
+	Ok(())
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+impl Flags {
+	#[inline(always)]
+	/// Get the underlying unsigned integer.
+	pub(crate) fn into_inner(self) -> u32 { self.0 }
+
+	/// Split the program arguments into files and flags.
+	///
+	/// # Panics:
+	///
+	/// - Arguments are empty.
+	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, impl Iterator<Item = String>) {
+		let mut flag_count = 0;
+		let bits = iterator
+			.iter()
+			.map_while(|argument|
+				{
+					let raw = argument
+						.strip_prefix('-')?
+						.replace(|symbol| !flag_check(&symbol), "");
+					flag_count += 1;
+					Some(raw)
+				}
+			)
+			.fold(
+				Self(0),
+				|mut bits, raw|
+				{
+					for symbol in raw
+						.chars()
+						.filter(|symbol| Self::INUSE_IDENTIFIERS.contains(symbol))
+					{ *bits |= 1 << Self::from(symbol).into_inner() }
+					bits
+				}
+			);
+		(
+			bits,
+			iterator
+				.into_iter()
+				.skip(flag_count)
+		)
+	}
+}
+
+impl From<char> for Flags {
+	fn from(symbol: char) -> Self {
+		#[cfg(debug_assertions)] if !flag_check(&symbol) { panic!("get a flag  NOT-ALPHA") }
+		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
+	}
+}
+
+impl Deref for Flags {
+	type Target = u32;
+
+	#[inline(always)]
+	fn deref(&self) -> &u32 { &self.0 }
+}
+
+impl DerefMut for Flags {
+	#[inline(always)]
+	fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
