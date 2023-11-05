@@ -5,6 +5,7 @@ use lofty::{
 };
 use std::{
 	fs::File,
+	path::PathBuf,
 	cell::Cell,
 	time::{ Duration, Instant },
 	io::{
@@ -49,7 +50,7 @@ pub struct Playlist {
 
 /// A byte stream.
 pub struct Track {
-	stream: File,
+	file_path: PathBuf,
 	repeats: Cell<isize>,
 	duration: Duration,
 }
@@ -118,11 +119,11 @@ impl Playlist {
 			.track_index_check()
 			.is_none()
 		{
-			let track = unsafe { self.nth_unchecked(handle.track_index_get_unchecked()) };
-			let flow = track.play_with(handle);
-			track.stream_rewind()?;
-
-			match flow {
+			match unsafe {
+				self
+					.nth_unchecked(handle.track_index_get_unchecked())
+					.play_with(handle)
+			} {
 				Ok(ControlFlow::Break) => return Ok(ControlFlow::Break),
 				Ok(ControlFlow::SkipSkip) => return Ok(ControlFlow::Skip),
 				Ok(ControlFlow::Skip) => continue,
@@ -317,11 +318,8 @@ impl TryFrom<SerDePlaylist> for Playlist {
 impl Track {
 	pub fn play_with(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
 		let mut stream = Vec::with_capacity(127);
-		self
-			.stream
-			.try_clone()?
-			.read_to_end(&mut stream)?;
-		let pointer =  stream.as_slice() as *const [u8];
+		File::open(&self.file_path)?.read_to_end(&mut stream)?;
+		let pointer = stream.as_slice() as *const [u8];
 
 		data.stream_play(Cursor::new(unsafe { &*pointer }))?;
 		let controls = data
@@ -394,15 +392,6 @@ impl Track {
 	}
 
 	#[inline]
-	pub fn stream_rewind(&self) -> Result<(), Error> {
-		self
-			.stream
-			.try_clone()?
-			.rewind()
-			.map_err(Error::Io)
-	}
-
-	#[inline]
 	pub fn repeats_can(&self) -> bool {
 		self
 			.repeats
@@ -424,14 +413,14 @@ impl TryFrom<SerDeTrack> for Track {
 	type Error = Error;
 
 	fn try_from(SerDeTrack { file, time }: SerDeTrack) -> Result<Self, Error> {
-		let path = fmt_path(file)?;
+		let file_path = fmt_path(file)?;
 
-		let duration = read_from_path(&path)?
+		let duration = read_from_path(&file_path)?
 			.properties()
 			.duration();
 		Ok(
 			Self {
-				stream: File::open(path)?,
+				file_path,
 				repeats: Cell::new(time.unwrap_or_default()),
 				duration,
 			}
