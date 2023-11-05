@@ -149,11 +149,7 @@ macro_rules! create_flags {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
 
-fn exit() {
-	let _ = disable_raw_mode();
-}
-
-fn main() -> Result<(), Error> {
+fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Error> {
 	panic::set_hook(
 		Box::new(|info|
 			unsafe {
@@ -175,42 +171,12 @@ fn main() -> Result<(), Error> {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
 				println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
-				exit()
+				let _ = disable_raw_mode();
 			}
 		)
 	);
 
-	let mut arguments: Vec<String> = args()
-		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
-		.collect();
-	let is_terminal = stdin().is_terminal();
-	if !is_terminal {
-		arguments.reserve(16);
-		arguments.extend(
-			stdin()
-				.lock()
-				.lines()
-				.map_while(|result|
-					result
-						.as_ref()
-						.map_or(false, |line| !line.is_empty())
-						.then(|| result.unwrap())
-				)
-				.map(String::from)
-		)
-	};
-	if arguments
-		.first()
-		.is_none()
-	{ panic!("get the program arguments  no arguments given") }
-	let (flags, files) = Flags::separate_from(arguments);
-
-	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
-	if !flags.should_spawn_headless() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
-		let _ = enable_raw_mode();
-	}
-
-	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(files)?;
+	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(arguments)?;
 	if flags.should_repeat_track() {
 		let last = lists
 			.last_mut()
@@ -231,10 +197,7 @@ fn main() -> Result<(), Error> {
 
 	let mut player = Playhandle::try_from(streams)?;
 	match player.all_streams_play()? {
-		ControlFlow::Break => {
-			exit();
-			return Ok(())
-		},
+		ControlFlow::Break => return Ok(()),
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
 		ControlFlow::Default => { },
 	};
@@ -244,8 +207,48 @@ fn main() -> Result<(), Error> {
 		.controls_take();
 	controls.exit_notify();
 	controls.clean_up();
-	exit();
 	Ok(())
+}
+
+fn main() {
+	let mut arguments: Vec<String> = args()
+		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
+		.collect();
+	let is_terminal = stdin().is_terminal();
+	if is_terminal {
+		arguments.reserve(16);
+		arguments.extend(
+			stdin()
+				.lock()
+				.lines()
+				.map_while(|result|
+					result
+						.as_ref()
+						.map_or(false, |line| !line.is_empty())
+						.then(|| result.unwrap())
+				)
+				.map(String::from)
+		)
+	};
+	if arguments
+		.first()
+		.is_none()
+	{
+		println!("No input given.");
+		return
+	}
+
+	let (flags, files) = Flags::separate_from(arguments);
+
+	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
+	if !flags.should_spawn_headless() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
+		let _ = enable_raw_mode();
+	}
+
+	let result = run(files, flags);
+
+	let _ = disable_raw_mode();
+	if let Err(error) = result { println!("{error}") }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Flags {
