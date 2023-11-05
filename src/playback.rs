@@ -3,28 +3,31 @@ use lofty::{
 	AudioFile,
 	read_from_path,
 };
-use rodio::Sink;
 use std::{
-	path::Path,
 	fs::File,
-	time::Duration,
+	time::{ Duration, Instant },
+	cell::Cell,
+	thread::sleep,
 	// mem::MaybeUninit,
 	// ptr::NonNull,
 	io::{
-		BufReader,
 		Cursor,
 		Read,
+		Seek,
+		Write,
+		stdout,
 	},
 };
 use fastrand::Rng;
+use crossbeam_channel::RecvTimeoutError;
 use super::Error;
-use super::VectorError;
+use super::{ VectorError, UnwrapError };
 use super::songs::{ Track, Playlist };
-use super::in_out::IOHandle;
+use super::in_out::{ IOHandle, Signal };
+use super::utilities::{ clear, fmt_path };
+use super::TICK;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const STEP: f32 = 0.05;
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type Handle = BufReader<File>;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Streams {
@@ -33,30 +36,30 @@ pub struct Streams {
 	/// [`streams`]: Self#field.streams
 	stream_map: Vec<usize>,
 	streams: Vec<Stream>,
-	repeats: isize,
+	repeats: Cell<isize>,
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Stream {
 	stream: Vec<u8>,
-	repeats: isize,
+	repeats: Cell<isize>,
 	duration: Duration,
 }
 
-pub struct Playhandle<'a> {
-	current_track_index: usize,
-	current_playlist_index: usize,
+/// The player's state.
+pub struct Playhandle {
+	current_coordinates_index: Cell<usize>,
+	current_playlist_index: Cell<usize>,
 
 	streams_vector: Vec<Streams>,
 
 	/// Global volume.
-	volume: f32,
-	paused: bool,
+	volume: Cell<f32>,
+	paused: Cell<bool>,
 	//  1.0 + 2.0 * -1.0 = -1.0
 	// -1.0 + 2.0 *  1.0 =  1.0
 
-	io: &'a IOHandle,
-	sink: Sink,
+	io: IOHandle,
 
 	generator: Rng,
 	// phantomdata
@@ -66,14 +69,42 @@ pub struct Playhandle<'a> {
 #[derive(Default)]
 pub enum ControlFlow {
 	Break,
+	Skip,
+	SkipSkip,
 	#[default] Default,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Streams {
-	pub fn play_with(&mut self, handle: &Playhandle) -> Result<(), Error> {
-		let Some(mut stream) = self.nth_mut(handle.current_track_index) else { Err(VectorError::OutOfBounds)? };
-		stream.play_with(handle)
+	#[inline(always)]
+	pub fn entry_count(&self) -> usize {
+		self
+			.streams
+			.len()
 	}
+
+	pub fn play_with(&self, handle: &Playhandle) -> Result<ControlFlow, Error> {
+		while handle
+			.track_index_get()
+			.is_ok()
+		{
+			match unsafe {
+				self
+					.nth_unchecked(handle.track_index_get_unchecked())
+					.play_with(handle)?
+			} {
+				ControlFlow::Break => return Ok(ControlFlow::Break),
+				ControlFlow::SkipSkip => return Ok(ControlFlow::Skip),
+				ControlFlow::Skip => continue,
+				ControlFlow::Default => { },
+			}
+		}
+		if self.repeats_can() {
+			self.repeats_update();
+			return self.play_with(handle)
+		}
+		Ok(().into())
+	}
+
 	pub fn shuffle(&mut self, random_state: &mut Rng) {
 		let map = &mut self.stream_map;
 		let length = map.len();
@@ -176,9 +207,27 @@ impl Streams {
 	/// [`nth_unchecked`]: Self::nth_unchecked
 	/// [`slice`]: std#primitive.slice
 	pub unsafe fn nth_unchecked_mut(&mut self, index: usize) -> &mut Stream {
+		let mapped_index = self.get_index_unchecked(index);
 		self
 			.streams
-			.get_unchecked_mut(self.get_index_unchecked(index))
+			.get_unchecked_mut(mapped_index)
+	}
+
+	#[inline]
+	pub fn repeats_can(&self) -> bool {
+		self
+			.repeats
+			.get() != 0
+	}
+
+	#[inline]
+	pub fn repeats_update(&self) {
+		let old = self
+			.repeats
+			.get();
+		self
+			.repeats
+			.set(old - 1);
 	}
 }
 
@@ -199,7 +248,7 @@ impl TryFrom<Playlist> for Streams {
 					Self {
 						stream_map,
 						streams,
-						repeats: time.unwrap_or_default(),
+						repeats: Cell::new(time.unwrap_or_default()),
 					}
 				}
 			)
@@ -207,17 +256,109 @@ impl TryFrom<Playlist> for Streams {
 }
 
 impl Stream {
-	pub fn play_with(&self, data: &Playhandle) -> Result<(), Error> {
-		let sink = data
-			.io
-			.play_stream(
-				Cursor::new(
-					self
-						.stream
-						.as_slice()
-				)
-			)?;
+	pub fn play_with(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
+		let pointer =  self
+			.stream
+			.as_slice() as *const [u8];
+		data.stream_play(Cursor::new(unsafe { &*pointer }))?;
+		let Some(controls) = data
+			.io_handle_get()
+			.controls_get() else { Err(UnwrapError::InvalidOption)? };
+
+		let mut whole_elapsed_time = Duration::ZERO;
+
+		let decrement: fn(usize) -> usize = |old| old - (old > 0) as usize;
+		let increment: fn(usize) -> usize = |old| old + 1;
+
+		data.playback_play();
+		while whole_elapsed_time < self.duration {
+			let moment_capture = Instant::now();
+
+			data.player_display(whole_elapsed_time)?;
+			match controls.signal_receive(moment_capture) {
+				Err(RecvTimeoutError::Timeout) => {
+					if !data.playback_is_paused() { whole_elapsed_time += TICK }
+					continue
+				},
+				Ok(Signal::PlaylistNext) => {
+					data.playlist_index_set(&increment)?;
+					data.playback_clear();
+					return Ok(ControlFlow::SkipSkip)
+				},
+				Ok(Signal::PlaylistBack) => {
+					data.playlist_index_set(&decrement)?;
+					data.playback_clear();
+					return Ok(ControlFlow::SkipSkip)
+				},
+				Ok(Signal::Exit) => return Ok(ControlFlow::Break),
+
+				Ok(Signal::TrackNext) => {
+					data.track_index_set(&increment)?;
+					data.playback_clear();
+					return Ok(ControlFlow::Skip)
+				},
+				Ok(Signal::TrackBack) => {
+					data.track_index_set(&decrement)?;
+					data.playback_clear();
+					return Ok(ControlFlow::Skip)
+				},
+				Ok(Signal::Play) => data.playback_toggle(),
+
+				Ok(Signal::VolumeIncrease) => data.volume_increment(),
+				Ok(Signal::VolumeDecrease) => data.volume_decrement(),
+				Ok(Signal::Mute) => data.volume_mute(),
+
+				Err(RecvTimeoutError::Disconnected) => Err(UnwrapError::ChannelDisconnect)?,
+			}
+
+			data.volume_update();
+			if let Some(error) = data.playlist_index_check() { Err(error)? };
+			if let Some(error) = data.track_index_check() { Err(error)? };
+
+
+			if !data.playback_is_paused() { whole_elapsed_time += moment_capture.elapsed() }
+		}
+		if self.repeats_can() {
+			self.repeats_update();
+			return self.play_with(data)
+		}
+		Ok(().into())
+	}
+
+	pub fn play_headless_with(&self, data: &Playhandle) -> Result<(), Error> {
+		let pointer = self
+			.stream
+			.as_slice() as *const [u8];
+		data.stream_play(Cursor::new(unsafe { &*pointer }))?;
+
+		let mut whole_elapsed_time = Duration::ZERO;
+		while whole_elapsed_time < self.duration {
+			data.player_display(whole_elapsed_time)?;
+			sleep(TICK);
+			whole_elapsed_time += TICK;
+		}
+		if self.repeats_can() {
+			self.repeats_update();
+			return self.play_headless_with(data)
+		}
 		Ok(())
+	}
+
+	#[inline]
+	pub fn repeats_can(&self) -> bool {
+		self
+			.repeats
+			.get() != 0
+	}
+
+	#[inline]
+	pub fn repeats_update(&self) {
+		let old = self
+			.repeats
+			.get();
+		self
+			.repeats
+			.set(old - 1);
 	}
 }
 
@@ -225,9 +366,9 @@ impl TryFrom<Track> for Stream {
 	type Error = Error;
 
 	fn try_from(Track { file, time }: Track) -> Result<Self, Error> {
-		let path = Path::new(&file.into_string());
+		let path = fmt_path(file)?;
 
-		let mut file = File::open(path)?;
+		let mut file = File::open(&path)?;
 		let mut stream = Vec::with_capacity(127);
 		file.read_to_end(&mut stream)?;
 
@@ -237,61 +378,215 @@ impl TryFrom<Track> for Stream {
 		Ok(
 			Self {
 				stream,
-				repeats: time.unwrap_or_default(),
+				repeats: Cell::new(time.unwrap_or_default()),
 				duration,
 			}
 		)
 	}
 }
 
-impl<'a> Playhandle<'a> {
-	const STEP: f32 = 0.05;
-
-	pub fn play(&mut self) -> Result<(), Error>  {
-		while self.current_playlist_index < self
+impl Playhandle {
+	#[inline(always)]
+	/// Count the number of [`Streams`] held.
+	pub fn entries_count(&self) -> usize {
+		self
 			.streams_vector
 			.len()
+	}
+
+	/// Display the default player.
+	pub fn player_display(&self, elapsed: Duration) -> Result<(), Error> {
+		print!("\r[{}][{:>5.2}]\0",
+			{
+				let seconds = elapsed.as_secs();
+				let minutes = seconds / 60;
+				format_args!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
+			},
+			self
+				.volume
+				.get(),
+		);
+		stdout()
+			.flush()
+			.map_err(Error::Io)
+	}
+
+	/// Play all streams back.
+	pub fn all_streams_play(&mut self) -> Result<ControlFlow, Error>  {
+		while self
+			.playlist_index_get()
+			.is_ok()
 		{
-			let Some(mut streams) = self
-				.streams_vector
-				.get_mut(self.current_playlist_index) else { Err(VectorError::OutOfBounds)? };
-			streams.shuffle(&mut self.generator);
-			streams.play_with(&self);
-			self.current_playlist_index += 1
+			let index = self.playlist_index_get()?;
+			unsafe {
+				self
+					.streams_vector
+					.get_unchecked_mut(index)
+					.shuffle(&mut self.generator)
+			}
+			match unsafe {
+				self
+					.streams_vector
+					.get_unchecked(index)
+					.play_with(self)?
+			} {
+				ControlFlow::Break => return Ok(ControlFlow::Break),
+				ControlFlow::Skip => { }, // NOTE(by: @OST-Gh): assume index math already handled.
+				ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): cannot return level-2 skip at playlist level.
+				ControlFlow::Default => self.playlist_index_set(|old| old + 1)?,
+			}
+			clear()?
 		}
-		Ok(())
+		Ok(().into())
 	}
 
-	pub fn play_playlist(&mut self, playlist: Playlist) -> Result<(), Error> {
-		Ok(())
-	}
 
-	const fn clamp_current(&mut self) {
-		let Some(maximum) = self
-			.streams_vector
-			.get(self.current_playlist_index)
-			.map(|vector|
-				vector
-					.streams
-					.len()
-			) else { return };
+	#[inline(always)]
+	/// Play a single source back.
+	pub fn stream_play(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<(), Error> {
 		self
-			.current_track_index = self
-			.current_track_index
-			.clamp(0, maximum);
+			.io
+			.stream_play(source)
+	}
+
+	#[inline]
+	/// Make sure that the playlist-pointer is not [out of bounds]
+	///
+	/// # Returns:
+	///
+	/// Returns [`None`] if there is no errors.
+	///
+	/// [out of bounds]: VectorError::OutOfBounds
+	fn playlist_index_check(&self) -> Option<VectorError> {
+		let index = self
+			.current_playlist_index
+			.get();
+		let maximum = self
+			.streams_vector
+			.len();
+		(index >= maximum).then_some(VectorError::OutOfBounds)
+	}
+
+	#[inline]
+	/// Make sure that the track-pointer is not [out of bounds]
+	///
+	/// # Returns:
+	///
+	/// Returns [`None`] if there is no errors.
+	///
+	/// [out of bounds]: VectorError::OutOfBounds
+	fn track_index_check(&self) -> Option<VectorError> {
+		let playlist_index = match self.playlist_index_get() {
+			Ok(index) => index,
+			Err(error) => return Some(error),
+		};
+		let index = self
+			.current_coordinates_index
+			.get();
+		let maximum = unsafe {
+			self
+				.streams_vector
+				.get_unchecked(playlist_index)
+				.entry_count()
+		};
+		(index >= maximum).then_some(VectorError::OutOfBounds)
+	}
+
+	/// Get the playlist-pointer.
+	pub fn playlist_index_get(&self) -> Result<usize, VectorError> {
+		self
+			.playlist_index_check()
+			.map_or_else(
+				||
+				Ok(
+					self
+						.current_playlist_index
+						.get()
+				),
+				Err,
+			)
+	}
+	/// Get the track-pointer.
+	pub fn track_index_get(&self) -> Result<usize, VectorError> {
+		self
+			.playlist_index_check()
+			.map_or_else(
+				||
+				Ok(self.track_index_get_unchecked()),
+				Err,
+			)
 	}
 
 	#[inline(always)]
-	const fn clamp_volume_internal(&mut self) {
-		self.volume = self
-			.volume
-			.clamp(-1.0, 2.0)
+	pub fn playlist_index_get_unchecked(&self) -> usize {
+		self
+			.current_playlist_index
+			.get()
+	}
+	#[inline(always)]
+	pub fn track_index_get_unchecked(&self) -> usize {
+		self
+			.current_coordinates_index
+			.get()
 	}
 
-	pub fn get_volume(&self) -> f32 {
+	pub fn playlist_index_set(&self, setter: impl FnOnce(usize) -> usize) -> Result<(), VectorError> {
+		self
+			.playlist_index_check()
+			.map_or_else(
+				||
+				Ok(
+					self
+						.current_playlist_index
+						.set(setter(self.playlist_index_get_unchecked()))
+				),
+				Err,
+			)
+	}
+	pub fn track_index_set(&self, setter: impl FnOnce(usize) -> usize) -> Result<(), VectorError> {
+		self
+			.track_index_check()
+			.map_or_else(
+				||
+				Ok(
+					self
+						.current_coordinates_index
+						.set(setter(self.track_index_get_unchecked()))
+				),
+				Err,
+			)
+	}
+
+	pub fn io_handle_get(&self) -> &IOHandle { &self.io }
+	pub fn io_handle_take(self) -> IOHandle { self.io }
+
+	#[inline]
+	pub fn volume_get(&self) -> f32 {
 		self
 			.volume
+			.get()
 			.clamp(0.0, 2.0)
+	}
+
+	#[inline]
+	pub fn volume_set(&self, map: impl FnOnce(f32) -> f32) {
+		self
+			.volume
+			.set(map(self.volume_get()).clamp(-1.0, 2.0))
+	}
+
+	#[inline]
+	pub fn volume_set_raw(&self, map: impl FnOnce(f32) -> f32) {
+		self
+			.volume
+			.set(
+				map(
+					self
+						.volume
+						.get()
+				)
+					.clamp(-1.0, 2.0)
+			)
 	}
 
 	#[inline]
@@ -300,7 +595,7 @@ impl<'a> Playhandle<'a> {
 	/// Call [`set_volume`] to take effect.
 	///
 	/// [`set_volume`]: Self::set_volume
-	pub const fn volume_mute(&mut self) { self.volume += 2.0 * -self.volume }
+	pub fn volume_mute(&self) { self.volume_set_raw(|old| old + 2.0 * -old) }
 
 	#[inline]
 	/// Low level dial up function.
@@ -311,10 +606,7 @@ impl<'a> Playhandle<'a> {
 	///
 	/// [`volume_decrement`]: Self::volume_decrement
 	/// [`set_volume`]: Self::set_volume
-	pub const fn volume_increment(&mut self) {
-		self.volume += Self::STEP;
-		self.clamp_volume_internal()
-	}
+	pub fn volume_increment(&self) { self.volume_set_raw(|old| old + STEP) }
 
 	#[inline]
 	/// Low level dial down function.
@@ -325,36 +617,82 @@ impl<'a> Playhandle<'a> {
 	///
 	/// [`volume_increment`]: Self::volume_increment
 	/// [`set_volume`]: Self::set_volume
-	pub const fn volume_decrement(&mut self) {
-		self.volume -= Self::STEP;
-		self.clamp_volume_internal()
-	}
+	pub fn volume_decrement(&self) { self.volume_set_raw(|old| old - STEP) }
 
 	/// Update the volume on the internal [`Sink`].
-	pub fn set_volume(&mut self) {
+	pub fn volume_update(&self) {
 		self
-			.sink
-			.set_volume(self.get_volume());
+			.io
+			.playback_get()
+			.set_volume(self.volume_get());
 	}
 
-	pub fn from_bundle_and_streams_vector(bundle: &'a IOHandle, streams_vector: Vec<Streams>) -> Result<Self, Error> {
+	#[inline(always)]
+	pub fn playback_play(&self) {
+		self
+			.io
+			.playback_get()
+			.play();
+		self
+			.paused
+			.set(false)
+	}
+
+	#[inline(always)]
+	pub fn playback_pause(&self) {
+		self
+			.io
+			.playback_get()
+			.pause();
+		self
+			.paused
+			.set(true)
+	}
+
+	#[inline]
+	pub fn playback_toggle(&self) {
+		if self.playback_is_paused() { self.playback_play() } else { self.playback_pause() }
+	}
+
+	#[inline]
+	pub fn playback_clear(&self) {
+		self
+			.io
+			.playback_get()
+			.clear()
+	}
+
+	#[inline(always)]
+	pub fn playback_is_paused(&self) -> bool {
+		self
+			.paused
+			.get()
+	}
+
+	pub fn bundle_and_streams_vector_from(bundle: IOHandle, streams_vector: Vec<Streams>) -> Result<Self, Error> {
 		Ok(
 			Self {
-				current_track_index: 0,
-				current_playlist_index: 0,
+				current_coordinates_index: Cell::new(0),
+				current_playlist_index: Cell::new(0),
 
 				streams_vector,
 			
-				volume: 1.0,
-				paused: false,
+				volume: Cell::new(1.0),
+				paused: Cell::new(
+					bundle
+						.playback_get()
+						.is_paused()
+				),
 
 				io: bundle,
-
-				sink: Sink::try_new(bundle.get_sound_out_handle())?,
 
 				generator: Rng::new(),
 			}
 		)
 	}
+}
+
+impl From<()> for ControlFlow {
+	fn from(_: ()) -> Self { Self::Default }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

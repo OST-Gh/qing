@@ -9,7 +9,10 @@ use lofty::LoftyError;
 use rodio::{
 	PlayError,
 	decoder::DecoderError,
+	StreamError,
 };
+use toml::de::Error as TOMLError;
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 pub mod in_out;
 
@@ -31,8 +34,18 @@ const TICK: Duration = Duration::from_millis(250);
 pub enum VectorError {
 	#[error("Index out of bounds")]
 	OutOfBounds,
+
 	#[error("Empty vector encountered.")]
 	EmptyVector,
+}
+
+#[derive(Error, Debug)]
+pub enum UnwrapError {
+	#[error("Invalid option version caught.")]
+	InvalidOption,
+
+	#[error("Channel disconnected.")]
+	ChannelDisconnect,
 }
 
 #[derive(Error, Debug)]
@@ -40,17 +53,26 @@ pub enum Error {
 	#[error("IO: {0}")]
 	Io(#[from] IOError),
 
-	#[error("Decode: {0}")]
+	#[error("Rodio-Decode: {0}")]
 	Decode(#[from] DecoderError),
-	#[error("Play: {0}")]
+	#[error("Rodio-Play: {0}")]
 	Play(#[from] PlayError),
+	#[error("Rodio-Stream: {0}")]
+	Stream(#[from] StreamError),
+
 	#[error("Lofty: {0}")]
 	Lofty(#[from] LoftyError),
+
+	#[error("TOML: {0}")]
+	Deserialise(#[from] TOMLError),
 
 	#[error("Variable: {0}")]
 	Variable(#[from] VarError),
 
 	#[error("Vector: {0}")]
 	Vector(#[from] VectorError),
+
+	#[error("Unwrap: {0}")]
+	Unwrap(#[from] UnwrapError),
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

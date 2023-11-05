@@ -43,10 +43,11 @@ pub fn fmt_path(path: impl AsRef<str>) -> Result<PathBuf, Error> {
 				)
 				.collect::<Result<Vec<String>, Error>>()?
 				.join(MAIN_SEPARATOR_STR)
-		).canonicalize()?
+		)
+			.canonicalize()?
 	)
 }
 
 /// Print the clear line sequence.
-pub fn clear() -> Result<(), Error> { execute!(stdout(), Clear(ClearType::CurrentLine)).map_err(Error::from) }
+pub fn clear() -> Result<(), Error> { execute!(stdout(), Clear(ClearType::CurrentLine)).map_err(Error::Io) }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

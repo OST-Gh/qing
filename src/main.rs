@@ -11,37 +11,24 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	panic,
-	cell::OnceCell,
 	env::args,
-	path::{ MAIN_SEPARATOR_STR, PathBuf },
-	time::{ Duration, Instant },
+	convert::identity,
 	ops::{ Deref, DerefMut },
-	env::{ VarError, var },
 	io::{
-		stdout,
 		stdin,
-		Error as IoError,
 		BufRead,
 		IsTerminal,
 	},
 };
-use crossterm::{
-	execute,
-	terminal::{
-		Clear,
-		ClearType,
-	},
+use crossterm::terminal::{
+	disable_raw_mode,
+	enable_raw_mode,
+	is_raw_mode_enabled,
 };
-use lofty::LoftyError;
-use crossbeam_channel::RecvTimeoutError;
-use rodio::{
-	Sink,
-	PlayError,
-	decoder::DecoderError,
-};
-use quing::Error;
-use quing::in_out::Bundle;
+use quing::{ Error, VectorError };
+use quing::in_out::IOHandle;
 use quing::songs::Playlist;
+use quing::playback::{ Playhandle, Streams, ControlFlow };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 create_flags!{
 	#[cfg_attr(debug_assertions, derive(Debug))]
@@ -152,9 +139,10 @@ macro_rules! create_flags {
 	};
 }
 
-/// The current check that determines wether or not a character is valid.
-fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+
 fn main() -> Result<(), Error> {
 	panic::set_hook(
 		Box::new(|info|
@@ -177,15 +165,17 @@ fn main() -> Result<(), Error> {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
 				println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
+				let _ = disable_raw_mode();
 			}
 		)
 	);
+	if !is_raw_mode_enabled().is_ok_and(identity) { let _ = enable_raw_mode(); }
 
-	let is_tty = stdin().is_terminal();
+	let is_terminal = stdin().is_terminal();
 	let mut arguments: Vec<String> = args()
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
-	if !is_tty {
+	if !is_terminal {
 		arguments.reserve(16);
 		arguments.extend(
 			stdin()
@@ -195,58 +185,46 @@ fn main() -> Result<(), Error> {
 				.map(String::from)
 		)
 	};
-	if let None = arguments.first() {
-		panic!("get the program arguments  no arguments given")
-	}
+	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
 	let (flags, files) = Flags::separate_from(arguments);
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
 	let mut lists: Vec<Playlist> = Playlist::try_from_paths(files)?;
 	if flags.should_repeat_track() {
-		let mut last = lists
+		let last = lists
 			.last_mut()
-			.map_or(Err(Error::EmptyVector), Ok)?;
-		if flags.should_repeat_playlist() { last.set_time(-1) }
+			.map_or(Err(VectorError::EmptyVector), Ok)?;
+		if flags.should_repeat_playlist() { last.time_set(-1) }
 		if flags.should_repeat_track() {
 			for track in last
-				.get_song_mut()
+				.song_get_mut()
 				.iter_mut()
 			{ track.set_time(-1) }
 		}
 	}
+	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)?]; }
+	let streams = lists
+		.into_iter()
+		.map(Streams::try_from)
+		.collect::<Result<Vec<Streams>, Error>>()?;
 
-	let initialisable_bundle = OnceCell::new(); // expensive operation only executed if no err.
-
-	let mut volume = 1.0;
-	// 1 + 2 * -1 = 1 - 2 = -1 
-	// -1 + 2 * 1 = -1 + 2 = 1
-
-	let lists_length = lists.len();
-	let mut lists_index = 0;
-	while lists_index < lists_length {
-		let old_lists_index = lists_index;
-		let list = unsafe { lists.get_unchecked_mut(old_lists_index) };
-
-		list.shuffle_song();
-		if let Err(why) = list.load_song() { log!(path; "loading [{}]" why; break) }
-
-		let bundle = initialisable_bundle.get_or_init(|| Bundle::with(is_tty || flags.should_spawn_headless()));
-
-		if list.is_empty() { list.repeat_or_increment(&mut lists_index) }
-
-		if list.play(bundle, &mut lists_index, &mut volume) { break }
-		clear()
+	let io_handle = IOHandle::try_from(is_terminal || flags.should_spawn_headless())?;
+	let mut player = Playhandle::bundle_and_streams_vector_from(io_handle, streams)?;
+	match player.all_streams_play()? {
+		ControlFlow::Break => return Ok(()),
+		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
+		ControlFlow::Default => { },
 	}
 
-	if let Some(controls) = initialisable_bundle
-		.into_inner()
-		.map(Bundle::take_controls)
-		.flatten()
+	if let Some(controls) = player
+		.io_handle_take()
+		.controls_take()
 	{
-		controls.notify_exit();
+		controls.exit_notify();
 		controls.clean_up();
 	}
+	let _ = disable_raw_mode();
 	Ok(())
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -19,11 +19,9 @@ use crossterm::event::{
 	KeyModifiers,
 };
 use std::{
-	fs::File,
+	time::Instant,
 	thread::{ self, JoinHandle },
-	time::{ Duration, Instant },
 	io::{
-		BufReader,
 		Seek,
 		Read,
 	},
@@ -33,11 +31,7 @@ use std::{
 	Formatter,
 	Debug,
 };
-use super::{
-	TICK,
-	songs::Instruction,
-	utilities::clear,
-};
+use super::TICK;
 use super::Error;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
@@ -67,8 +61,9 @@ const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
 ///
 /// [`OnceCell`]: std::cell::OnceCell
 pub struct IOHandle {
-	sound_out: (OutputStream, OutputStreamHandle), // NOTE(from: OST-Gh): Needs to be tuple, otherwise breaks
+	sound_out: (OutputStream, OutputStreamHandle), // NOTE(by: @OST-Gh): Needs to be tuple, otherwise breaks
 	controls: Option<Controls>,
+	playback: Sink,
 }
 
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -104,11 +99,43 @@ pub enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
-	/// Create a new [`Bundle`] with an optional control-thread.
-	pub(crate) fn with(is_tty: bool) -> Self {
-		let sound_out = rodio::OutputStream::try_default().unwrap_or_else(|why| panic!("determine the default audio output device  {why}"));
+	/// Get a reference to the underlying control structure.
+	pub fn controls_get(&self) -> Option<&Controls> {
+		self
+			.controls
+			.as_ref()
+	}
 
-		let controls = is_tty.then(||
+	pub fn sound_out_handle_get(&self) -> &OutputStreamHandle {
+		&self
+			.sound_out
+			.1
+	}
+
+	/// Take the underlying controls.
+	pub fn controls_take(self) -> Option<Controls> { self.controls }
+
+	#[inline]
+	pub fn playback_get(&self) -> &Sink { &self.playback }
+
+	/// Play a single source.
+	pub fn stream_play(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<(), Error> {
+		let decoder = Decoder::new(source)?;
+		self
+			.playback
+			.append(decoder);
+		Ok(())
+	}
+}
+
+impl TryFrom<bool> for IOHandle {
+	type Error = Error;
+
+	/// Create a new [`Bundle`] with an optional control-thread.
+	fn try_from(is_headless: bool) -> Result<Self, Error> {
+		let sound_out = rodio::OutputStream::try_default()?;
+
+		let controls = is_headless.then(||
 			{
 				let (signal_sender, signal_receiver) = channel::unbounded();
 				let (exit_notifier, exit_receiver) = channel::unbounded();
@@ -140,35 +167,16 @@ impl IOHandle {
 			}
 		);
 
-		Self {
-			sound_out,
-			controls,
-		}
-	}
+		let playback = Sink::try_new(&sound_out.1)?;
+		playback.pause();
 
-	/// Get a reference to the underlying control structure.
-	pub fn get_controls(&self) -> Option<&Controls> {
-		self
-			.controls
-			.as_ref()
-	}
-
-	pub fn get_sound_out_handle(&self) -> &OutputStreamHandle {
-		&self
-			.sound_out
-			.1
-	}
-
-	/// Take the underlying controls.
-	pub fn take_controls(self) -> Option<Controls> { self.controls }
-
-	/// Play a single file.
-	pub fn play_stream(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<Sink, Error> {
-		self
-			.sound_out
-			.1
-			.play_once(source)
-			.map_err(Error::from)
+		Ok(
+			Self {
+				sound_out,
+				controls,
+				playback,
+			}
+		)
 	}
 }
 
@@ -204,7 +212,7 @@ impl Controls {
 	///
 	/// [`notify_exit`]: Self::notify_exit
 	/// [`take_controls`]: Bundle::take_controls
-	pub(crate) fn clean_up(self) {
+	pub fn clean_up(self) {
 		let _ = self
 			.control_thread
 			.join();
@@ -226,14 +234,14 @@ impl Controls {
 	/// Used things: [`Bundle`], and [`get_controls`].
 	///
 	/// [`get_controls`]: Bundle::get_controls
-	pub(crate) fn notify_exit(&self) {
+	pub fn exit_notify(&self) {
 		let _ = self
 			.exit_notifier
 			.send(());
 	}
 
 	/// Try to receive a signal, by waiting for it for a set amount of time.
-	pub(crate) fn receive_signal(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
+	pub fn signal_receive(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
 		self
 			.signal_receiver
 			.recv_deadline(moment + TICK)
