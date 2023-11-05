@@ -64,6 +64,8 @@ pub struct Playhandle {
 	current_track_index: Cell<usize>,
 	current_playlist_index: Cell<usize>,
 
+	has_reached_current_playlist_end: Cell<bool>,
+
 	streams_vector: Vec<Playlist>,
 
 	/// Global volume.
@@ -116,11 +118,11 @@ impl Playlist {
 			.track_index_check()
 			.is_none()
 		{
-			match unsafe {
-				self
-					.nth_unchecked(handle.track_index_get_unchecked())
-					.play_with(handle)
-			} {
+			let track = unsafe { self.nth_unchecked(handle.track_index_get_unchecked()) };
+			let flow = track.play_with(handle);
+			track.stream_rewind()?;
+
+			match flow {
 				Ok(ControlFlow::Break) => return Ok(ControlFlow::Break),
 				Ok(ControlFlow::SkipSkip) => return Ok(ControlFlow::Skip),
 				Ok(ControlFlow::Skip) => continue,
@@ -392,6 +394,15 @@ impl Track {
 	}
 
 	#[inline]
+	pub fn stream_rewind(&self) -> Result<(), Error> {
+		self
+			.stream
+			.try_clone()?
+			.rewind()
+			.map_err(Error::Io)
+	}
+
+	#[inline]
 	pub fn repeats_can(&self) -> bool {
 		self
 			.repeats
@@ -455,6 +466,13 @@ impl Playhandle {
 			.is_empty()
 	}
 
+	#[inline(always)]
+	pub fn playlist_has_ended(&self) -> bool {
+		self
+			.has_reached_current_playlist_end
+			.take()
+	}
+
 	/// Display the default player.
 	///
 	/// The default player is: `[hh:mm:ss][vol.]`
@@ -500,11 +518,9 @@ impl Playhandle {
 				ControlFlow::Break => return Ok(ControlFlow::Break),
 				ControlFlow::Skip => { }, // NOTE(by: @OST-Gh): assume index math already handled.
 				ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): cannot return level-2 skip at playlist level.
-				ControlFlow::Default => {
-					clear()?;
-					if self.entries_count() - 1 <= unsafe { self.playlist_index_get_unchecked() } { return Ok(().into()) }
-				},
+				ControlFlow::Default => clear()?,
 			}
+			if self.playlist_has_ended() { return Ok(().into()) }
 		}
 		Ok(().into())
 	}
@@ -526,13 +542,12 @@ impl Playhandle {
 	///
 	/// [out of bounds]: VectorError::OutOfBounds
 	pub fn playlist_index_check(&self) -> Option<VectorError> {
-		let index = self
-			.current_playlist_index
-			.get();
-		let maximum = self
-			.streams_vector
-			.len();
-		(index >= maximum).then_some(VectorError::OutOfBounds)
+		(
+			self
+				.current_playlist_index
+				.get() >= self.entries_count()
+		)
+			.then_some(VectorError::OutOfBounds)
 	}
 
 	#[inline]
@@ -548,16 +563,18 @@ impl Playhandle {
 			Ok(index) => index,
 			Err(error) => return Some(error),
 		};
-		let index = self
-			.current_track_index
-			.get();
 		let maximum = unsafe {
 			self
 				.streams_vector
 				.get_unchecked(playlist_index)
 				.tracks_count()
 		};
-		(index >= maximum).then_some(VectorError::OutOfBounds)
+		(
+			self
+				.current_track_index
+				.get() >= maximum
+		)
+			.then_some(VectorError::OutOfBounds)
 	}
 
 	/// Get the playlist-pointer.
@@ -616,15 +633,10 @@ impl Playhandle {
 		let _ = self.track_index_try_set(|_| 0);
 		let old_index = unsafe { self.playlist_index_get_unchecked() };
 		let new_index = setter(old_index);
+		if new_index >= self.entries_count() { Err(VectorError::OutOfBounds)? }
 		self
 			.current_playlist_index
 			.set(new_index);
-		if let Some(error) = self.playlist_index_check() {
-			self
-				.current_playlist_index
-				.set(old_index);
-			Err(error)?
-		}
 		Ok(())
 	}
 
@@ -638,15 +650,25 @@ impl Playhandle {
 	pub fn track_index_try_set(&self, setter: impl FnOnce(usize) -> usize) -> Result<(), VectorError> {
 		let old_index = unsafe { self.track_index_get_unchecked() };
 		let new_index = setter(old_index);
+		let playlist_index = match self.playlist_index_get() {
+			Ok(index) => index,
+			Err(error) => Err(error)?,
+		};
+		let maximum = unsafe {
+			self
+				.streams_vector
+				.get_unchecked(playlist_index)
+				.tracks_count()
+		};
+		if new_index >= maximum {
+			self
+				.has_reached_current_playlist_end
+				.set(true);
+			Err(VectorError::OutOfBounds)?
+		}
 		self
 			.current_track_index
 			.set(new_index);
-		if let Some(error) = self.track_index_check() {
-			self
-				.current_track_index
-				.set(old_index);
-			Err(error)?
-		};
 		Ok(())
 	}
 
@@ -801,6 +823,8 @@ impl Playhandle {
 		Self {
 			current_track_index: Cell::new(0),
 			current_playlist_index: Cell::new(0),
+
+			has_reached_current_playlist_end: Cell::new(false),
 
 			streams_vector,
 		

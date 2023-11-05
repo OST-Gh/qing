@@ -60,6 +60,7 @@ impl SerDePlaylist {
 				},
 			}
 		}
+		rest.push(outliers);
 		Ok(
 			rest
 				.into_iter()
