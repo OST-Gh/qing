@@ -17,7 +17,7 @@ use toml::de::Error as TOMLError;
 pub mod in_out;
 
 /// A collection of file related structures, or implementations.
-pub mod songs;
+pub mod serde;
 
 /// IDK man.
 pub mod playback;

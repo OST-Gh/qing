@@ -20,27 +20,28 @@ use std::{
 };
 use fastrand::Rng;
 use crossbeam_channel::RecvTimeoutError;
-use super::Error;
-use super::{ VectorError, UnwrapError };
-use super::songs::{ Track, Playlist };
-use super::in_out::{ IOHandle, Signal };
-use super::utilities::{ clear, fmt_path };
-use super::TICK;
+use super::{
+	TICK,
+	Error,
+	VectorError,
+	UnwrapError,
+	serde::{ SerDeTrack, SerDePlaylist },
+	in_out::{ IOHandle, Signal },
+	utilities::{ clear, fmt_path },
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const STEP: f32 = 0.05;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct Streams {
+pub struct Playlist {
 	/// Map of indexes that map directly to the vector of [`streams`]
 	///
 	/// [`streams`]: Self#field.streams
-	stream_map: Vec<usize>,
-	streams: Vec<Stream>,
+	stream_map: Cell<Vec<usize>>,
+	streams: Vec<Track>,
 	repeats: Cell<isize>,
 }
 
-#[cfg_attr(debug_assertions, derive(Debug))]
-pub struct Stream {
+pub struct Track {
 	stream: Vec<u8>,
 	repeats: Cell<isize>,
 	duration: Duration,
@@ -48,10 +49,10 @@ pub struct Stream {
 
 /// The player's state.
 pub struct Playhandle {
-	current_coordinates_index: Cell<usize>,
+	current_track_index: Cell<usize>,
 	current_playlist_index: Cell<usize>,
 
-	streams_vector: Vec<Streams>,
+	streams_vector: Vec<Playlist>,
 
 	/// Global volume.
 	volume: Cell<f32>,
@@ -60,9 +61,6 @@ pub struct Playhandle {
 	// -1.0 + 2.0 *  1.0 =  1.0
 
 	io: IOHandle,
-
-	generator: Rng,
-	// phantomdata
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -74,7 +72,7 @@ pub enum ControlFlow {
 	#[default] Default,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-impl Streams {
+impl Playlist {
 	#[inline(always)]
 	pub fn entry_count(&self) -> usize {
 		self
@@ -84,33 +82,57 @@ impl Streams {
 
 	pub fn play_with(&self, handle: &Playhandle) -> Result<ControlFlow, Error> {
 		while handle
-			.track_index_get()
-			.is_ok()
+			.track_index_check()
+			.is_none()
 		{
 			match unsafe {
 				self
 					.nth_unchecked(handle.track_index_get_unchecked())
-					.play_with(handle)?
+					.play_with(handle)
 			} {
-				ControlFlow::Break => return Ok(ControlFlow::Break),
-				ControlFlow::SkipSkip => return Ok(ControlFlow::Skip),
-				ControlFlow::Skip => continue,
-				ControlFlow::Default => { },
+				Ok(ControlFlow::Break) => return Ok(ControlFlow::Break),
+				Ok(ControlFlow::SkipSkip) => return Ok(ControlFlow::Skip),
+				Ok(ControlFlow::Skip) => continue,
+				Ok(ControlFlow::Default) => { },
+				Err(Error::Vector(VectorError::OutOfBounds)) => { // NOTE(by: @OST-Gh): assume track-ptr's poisoned.
+					let _ = handle.track_index_set(|_| 0);
+					break
+				},
+				Err(other) => Err(other)?,
 			}
 		}
 		if self.repeats_can() {
 			self.repeats_update();
+			self.shuffle();
+			let _ = handle.track_index_set(|_| 0); // NOTE(by: @OST-Gh): should not error.
 			return self.play_with(handle)
 		}
+		let _ = handle.playlist_index_set(|old| old + 1);
 		Ok(().into())
 	}
 
-	pub fn shuffle(&mut self, random_state: &mut Rng) {
-		let map = &mut self.stream_map;
+	pub fn play_headless_with(&self, handle: &Playhandle) -> Result<(), Error> {
+		while handle
+			.track_index_check()
+			.is_none()
+		{
+			unsafe {
+				self
+					.nth_unchecked(handle.track_index_get_unchecked())
+					.play_headless_with(handle)?
+			}
+		}
+		Ok(())
+	}
+
+	pub fn shuffle(&self) {
+		let mut map = self
+			.stream_map
+			.take();
 		let length = map.len();
 
-		let mut generator = Rng::with_seed(random_state.u64(..));
-		generator.shuffle(map);
+		let mut generator = Rng::new();
+		generator.shuffle(&mut map);
 
 		for value in 0..length {
 			let index = value % length;
@@ -120,19 +142,28 @@ impl Streams {
 			// b a c
 			// b c a
 		}
+		self
+			.stream_map
+			.set(map)
 	}
 
 	#[inline(always)]
 	/// Get the correctly mapped index.
 	///
-	/// # Safety:
+	/// # Safety
 	///
-	/// This function will return [`None`] if the provided index is out of bounds.
+	/// - This function will return [`None`] if the provided index is out of bounds.
 	fn get_index(&self, index: usize) -> Option<usize> {
+		let map = self
+			.stream_map
+			.take();
+		let mapped_index = map
+			.get(index)
+			.map(usize::clone);
 		self
 			.stream_map
-			.get(index)
-			.map(usize::clone)
+			.set(map);
+		mapped_index
 	}
 
 	#[inline(always)]
@@ -140,21 +171,26 @@ impl Streams {
 	///
 	/// # Safety
 	///
-	/// It is undefined behaviour to index outside of a [`slice`]'s bounds.
+	/// - It is undefined behaviour to index outside of a [`slice`]'s bounds.
 	///
 	/// [`slice`]: std#primitive.slice
 	unsafe fn get_index_unchecked(&self, index: usize) -> usize {
-		*self
+		let map = self
 			.stream_map
-			.get_unchecked(index)
+			.take();
+		let mapped_index = unsafe { *map.get_unchecked(index) };
+		self
+			.stream_map
+			.set(map);
+		mapped_index
 	}
 
 	/// Get the nth mapped index's [`Stream`].
 	///
-	/// # Safety:
+	/// # Safety
 	///
-	/// This function will return [`None`] if the provided index is out of bounds.
-	pub fn nth(&self, index: usize) -> Option<&Stream> {
+	/// - This function will return [`None`] if the provided index is out of bounds.
+	pub fn nth(&self, index: usize) -> Option<&Track> {
 		self
 			.get_index(index)
 			.map(|index|
@@ -168,12 +204,12 @@ impl Streams {
 
 	/// Mutable counterpart to [`nth`]
 	///
-	/// # Safety:
+	/// # Safety
 	///
-	/// This function will return [`None`] if the provided index is out of bounds.
+	/// - This function will return [`None`] if the provided index is out of bounds.
 	///
 	/// [`nth`]: Self::nth
-	pub fn nth_mut(&mut self, index: usize) -> Option<&mut Stream> {
+	pub fn nth_mut(&mut self, index: usize) -> Option<&mut Track> {
 		self
 			.get_index(index)
 			.map(|index|
@@ -189,10 +225,10 @@ impl Streams {
 	///
 	/// # Safety
 	///
-	/// It is undefined behaviour to index outside of a [`slice`]'s bounds.
+	/// - It is undefined behaviour to index outside of a [`slice`]'s bounds.
 	///
 	/// [`slice`]: std#primitive.slice
-	pub unsafe fn nth_unchecked(&self, index: usize) -> &Stream {
+	pub unsafe fn nth_unchecked(&self, index: usize) -> &Track {
 		self
 			.streams
 			.get_unchecked(self.get_index_unchecked(index))
@@ -202,11 +238,11 @@ impl Streams {
 	///
 	/// # Safety
 	///
-	/// It is undefined behaviour to index outside of a [`slice`]'s bounds.
+	/// - It is undefined behaviour to index outside of a [`slice`]'s bounds.
 	///
 	/// [`nth_unchecked`]: Self::nth_unchecked
 	/// [`slice`]: std#primitive.slice
-	pub unsafe fn nth_unchecked_mut(&mut self, index: usize) -> &mut Stream {
+	pub unsafe fn nth_unchecked_mut(&mut self, index: usize) -> &mut Track {
 		let mapped_index = self.get_index_unchecked(index);
 		self
 			.streams
@@ -231,22 +267,22 @@ impl Streams {
 	}
 }
 
-impl TryFrom<Playlist> for Streams {
+impl TryFrom<SerDePlaylist> for Playlist {
 	type Error = Error;
 
-	fn try_from(Playlist { song, time }: Playlist) -> Result<Self, Error> {
+	fn try_from(SerDePlaylist { song, time }: SerDePlaylist) -> Result<Self, Error> {
 		song
 			.into_iter()
 			.enumerate()
 			.map(|(index, track)| Ok((index, track.try_into()?)))
-			.collect::<Result<Vec<(usize, Stream)>, Error>>()
+			.collect::<Result<Vec<(usize, Track)>, Error>>()
 			.map(|tuple|
 				{
-					let (stream_map, streams): (Vec<usize>, Vec<Stream>) = tuple
+					let (stream_map, streams): (Vec<usize>, Vec<Track>) = tuple
 						.into_iter()
 						.unzip();
 					Self {
-						stream_map,
+						stream_map: Cell::new(stream_map),
 						streams,
 						repeats: Cell::new(time.unwrap_or_default()),
 					}
@@ -255,7 +291,7 @@ impl TryFrom<Playlist> for Streams {
 	}
 }
 
-impl Stream {
+impl Track {
 	pub fn play_with(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
 		let pointer =  self
 			.stream
@@ -281,25 +317,29 @@ impl Stream {
 					continue
 				},
 				Ok(Signal::PlaylistNext) => {
-					data.playlist_index_set(&increment)?;
 					data.playback_clear();
+					clear()?;
+					data.playlist_index_set(increment)?;
 					return Ok(ControlFlow::SkipSkip)
 				},
 				Ok(Signal::PlaylistBack) => {
-					data.playlist_index_set(&decrement)?;
 					data.playback_clear();
+					clear()?;
+					data.playlist_index_set(decrement)?;
 					return Ok(ControlFlow::SkipSkip)
 				},
 				Ok(Signal::Exit) => return Ok(ControlFlow::Break),
 
 				Ok(Signal::TrackNext) => {
-					data.track_index_set(&increment)?;
 					data.playback_clear();
+					clear()?;
+					data.track_index_set(increment)?;
 					return Ok(ControlFlow::Skip)
 				},
 				Ok(Signal::TrackBack) => {
-					data.track_index_set(&decrement)?;
 					data.playback_clear();
+					clear()?;
+					data.track_index_set(decrement)?;
 					return Ok(ControlFlow::Skip)
 				},
 				Ok(Signal::Play) => data.playback_toggle(),
@@ -322,6 +362,7 @@ impl Stream {
 			self.repeats_update();
 			return self.play_with(data)
 		}
+		data.track_index_set(increment)?;
 		Ok(().into())
 	}
 
@@ -362,10 +403,10 @@ impl Stream {
 	}
 }
 
-impl TryFrom<Track> for Stream {
+impl TryFrom<SerDeTrack> for Track {
 	type Error = Error;
 
-	fn try_from(Track { file, time }: Track) -> Result<Self, Error> {
+	fn try_from(SerDeTrack { file, time }: SerDeTrack) -> Result<Self, Error> {
 		let path = fmt_path(file)?;
 
 		let mut file = File::open(&path)?;
@@ -414,15 +455,15 @@ impl Playhandle {
 	/// Play all streams back.
 	pub fn all_streams_play(&mut self) -> Result<ControlFlow, Error>  {
 		while self
-			.playlist_index_get()
-			.is_ok()
+			.playlist_index_check()
+			.is_none()
 		{
-			let index = self.playlist_index_get()?;
+			let index = unsafe { self.playlist_index_get_unchecked() };
 			unsafe {
 				self
 					.streams_vector
 					.get_unchecked_mut(index)
-					.shuffle(&mut self.generator)
+					.shuffle()
 			}
 			match unsafe {
 				self
@@ -433,11 +474,33 @@ impl Playhandle {
 				ControlFlow::Break => return Ok(ControlFlow::Break),
 				ControlFlow::Skip => { }, // NOTE(by: @OST-Gh): assume index math already handled.
 				ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): cannot return level-2 skip at playlist level.
-				ControlFlow::Default => self.playlist_index_set(|old| old + 1)?,
+				ControlFlow::Default => {
+					clear()?;
+					if self.entries_count() - 1 <= unsafe { self.playlist_index_get_unchecked() } { return Ok(().into()) }
+				},
 			}
-			clear()?
 		}
 		Ok(().into())
+	}
+
+	pub fn all_streams_play_headless(&mut self) -> Result<(), Error> {
+		while self
+			.playlist_index_check()
+			.is_none()
+		{
+			unsafe {
+				let index = self.playlist_index_get_unchecked();
+				self
+					.streams_vector
+					.get_unchecked_mut(index)
+					.shuffle();
+				self
+					.streams_vector
+					.get_unchecked(index)
+					.play_headless_with(self)?
+			}
+		}
+		Ok(())
 	}
 
 
@@ -481,7 +544,7 @@ impl Playhandle {
 			Err(error) => return Some(error),
 		};
 		let index = self
-			.current_coordinates_index
+			.current_track_index
 			.get();
 		let maximum = unsafe {
 			self
@@ -498,11 +561,7 @@ impl Playhandle {
 			.playlist_index_check()
 			.map_or_else(
 				||
-				Ok(
-					self
-						.current_playlist_index
-						.get()
-				),
+				Ok(unsafe { self.playlist_index_get_unchecked() }),
 				Err,
 			)
 	}
@@ -512,49 +571,63 @@ impl Playhandle {
 			.playlist_index_check()
 			.map_or_else(
 				||
-				Ok(self.track_index_get_unchecked()),
+				Ok(unsafe { self.track_index_get_unchecked() }),
 				Err,
 			)
 	}
 
 	#[inline(always)]
-	pub fn playlist_index_get_unchecked(&self) -> usize {
+	/// Get the playlist-pointer without checking if it has overrun the maximum.
+	///
+	/// # Safety
+	///
+	/// - This function corresponds to a basically return the raw held pointer.
+	pub unsafe fn playlist_index_get_unchecked(&self) -> usize {
 		self
 			.current_playlist_index
 			.get()
 	}
 	#[inline(always)]
-	pub fn track_index_get_unchecked(&self) -> usize {
+	/// Get the track-pointer without checking if it has overrun the maximum.
+	///
+	/// # Safety
+	///
+	/// - This function corresponds to a basically return the raw held pointer.
+	pub unsafe fn track_index_get_unchecked(&self) -> usize {
 		self
-			.current_coordinates_index
+			.current_track_index
 			.get()
 	}
 
+	/// Reset the track-pointer and set the playlist-pointer.
 	pub fn playlist_index_set(&self, setter: impl FnOnce(usize) -> usize) -> Result<(), VectorError> {
+		let _ = self.track_index_set(|_| 0);
+		let old_index = unsafe { self.playlist_index_get_unchecked() };
+		let new_index = setter(old_index);
 		self
-			.playlist_index_check()
-			.map_or_else(
-				||
-				Ok(
-					self
-						.current_playlist_index
-						.set(setter(self.playlist_index_get_unchecked()))
-				),
-				Err,
-			)
+			.current_playlist_index
+			.set(new_index);
+		if let Some(error) = self.playlist_index_check() {
+			self
+				.current_playlist_index
+				.set(old_index);
+			Err(error)?
+		}
+		Ok(())
 	}
 	pub fn track_index_set(&self, setter: impl FnOnce(usize) -> usize) -> Result<(), VectorError> {
+		let old_index = unsafe { self.track_index_get_unchecked() };
+		let new_index = setter(old_index);
 		self
-			.track_index_check()
-			.map_or_else(
-				||
-				Ok(
-					self
-						.current_coordinates_index
-						.set(setter(self.track_index_get_unchecked()))
-				),
-				Err,
-			)
+			.current_track_index
+			.set(new_index);
+		if let Some(error) = self.track_index_check() {
+			self
+				.current_track_index
+				.set(old_index);
+			Err(error)?
+		};
+		Ok(())
 	}
 
 	pub fn io_handle_get(&self) -> &IOHandle { &self.io }
@@ -669,10 +742,10 @@ impl Playhandle {
 			.get()
 	}
 
-	pub fn bundle_and_streams_vector_from(bundle: IOHandle, streams_vector: Vec<Streams>) -> Result<Self, Error> {
+	pub fn bundle_and_streams_vector_from(bundle: IOHandle, streams_vector: Vec<Playlist>) -> Result<Self, Error> {
 		Ok(
 			Self {
-				current_coordinates_index: Cell::new(0),
+				current_track_index: Cell::new(0),
 				current_playlist_index: Cell::new(0),
 
 				streams_vector,
@@ -685,8 +758,6 @@ impl Playhandle {
 				),
 
 				io: bundle,
-
-				generator: Rng::new(),
 			}
 		)
 	}

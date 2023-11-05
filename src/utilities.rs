@@ -20,9 +20,9 @@ use super::Error;
 pub fn fmt_path(path: impl AsRef<str>) -> Result<PathBuf, Error> {
 	fn expand(name: &str) -> Result<String, Error> {
 		let mut buffer = Vec::new();
-		for part in var(if name.starts_with('$') { expand(&name[1..])? } else { String::from(name) })?
+		for part in var(if let Some(stripped) = name.strip_prefix('$') { expand(stripped)? } else { String::from(name) })?
 			.split(MAIN_SEPARATOR_STR)
-			.map(|part| if part.starts_with('$') { expand(&part[1..]) } else { Ok(String::from(part)) })
+			.map(|part| if let Some(stripped) = name.strip_prefix('$') { expand(stripped) } else { Ok(String::from(part)) })
 		{ buffer.push(part?) }
 		Ok(buffer.join(MAIN_SEPARATOR_STR))
 	}
@@ -49,5 +49,9 @@ pub fn fmt_path(path: impl AsRef<str>) -> Result<PathBuf, Error> {
 }
 
 /// Print the clear line sequence.
-pub fn clear() -> Result<(), Error> { execute!(stdout(), Clear(ClearType::CurrentLine)).map_err(Error::Io) }
+pub fn clear() -> Result<(), Error> {
+	execute!(stdout(), Clear(ClearType::CurrentLine)).map_err(Error::Io)?;
+	print!("\r");
+	Ok(())
+}
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

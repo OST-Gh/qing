@@ -1,0 +1,115 @@
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+use serde::Deserialize;
+use std::fs::read_to_string;
+use super::{
+	Error,
+	VectorError,
+	utilities::fmt_path,
+};
+use toml::from_str;
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Deserialize)]
+/// A playlist with some metadata.
+pub struct SerDePlaylist {
+	pub(crate) song: Vec<SerDeTrack>,
+	pub(crate) time: Option<isize>,
+}
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Deserialize)]
+#[derive(Clone)]
+/// A song path with aditional metadata.
+pub struct SerDeTrack {
+	pub(crate) file: Box<str>,
+	pub(crate) time: Option<isize>,
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+impl SerDePlaylist {
+	#[inline] pub fn song_get(&self) -> &Vec<SerDeTrack> { &self.song }
+	#[inline] pub fn song_get_mut(&mut self) -> &mut Vec<SerDeTrack> { &mut self.song }
+	#[inline] pub fn song_take(self) -> Vec<SerDeTrack> { self.song }
+	pub fn time_set(&mut self, value: isize) { self.time = Some(value) }
+	pub fn time_unset(&mut self) { self.time = None }
+
+	/// Filter out [`Playlist`] [`files`] from audio [`files`].
+	///
+	/// This function returns a [`Vec`] that contains all successfully parsed playlists.\
+	/// The last item of the [`Vec`] is the so called outlier, items of the [`Iterator`] that could not be parsed to a playlist, and so are treated as tracks instead.
+	///
+	/// [`files`]: std::fs::File
+	pub fn try_from_paths(iterator: impl IntoIterator<Item = String>) -> Result<Vec<Self>, Error> {
+		let mut rest = Vec::with_capacity(8);
+		let mut outliers = SerDePlaylist {
+			song: Vec::with_capacity(8),
+			time: None,
+		};
+		for path in iterator {
+			match read_to_string(fmt_path(&path)?) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
+				Ok(contents) => rest.push(Self::try_from_contents(contents)?),
+				Err(_) => {
+					outliers
+						.song
+						.push(
+							SerDeTrack {
+								file: path.into_boxed_str(),
+								time: None,
+							}
+						);
+				},
+			}
+		}
+		Ok(
+			rest
+				.into_iter()
+				.filter(|list| !list.is_empty())
+				.collect()
+		)
+	}
+
+	/// Merge a list of [`Playlists`] into a single [`Playlist`].
+	///
+	/// [`Playlists`]: Playlist
+	pub fn flatten(lists: Vec<Self>) -> Result<Self, Error> {
+		let repeats = lists
+			.iter()
+			.min_by_key(|Self { time, .. }| time.unwrap_or_default())
+			.map_or(Err(VectorError::EmptyVector), Ok)?
+			.time
+			.unwrap_or_default();
+		let tracks: Vec<SerDeTrack> = lists
+			.into_iter()
+			.flat_map(|list| list.song)
+			.collect();
+		Ok(
+			Self {
+				song: tracks,
+				time: Some(repeats),
+			}
+		)
+	}
+
+	/// [`is_empty`] delegate
+	///
+	/// [`is_empty`]: Vec::is_empty
+	pub fn is_empty(&self) -> bool {
+		self
+			.song
+			.is_empty()
+	}
+
+	#[inline(always)]
+	/// Load a [`Playlist`] from a [`Path`] represented as a [`String`].
+	///
+	/// The string is, before being loaded, passed into the [`fmt_path`] function.
+	///
+	/// [`Path`]: std::path::Path
+	fn try_from_contents(contents: String) -> Result<Self, Error> { from_str(&contents).map_err(Error::from) }
+}
+
+impl SerDeTrack {
+	pub fn set_time(&mut self, value: isize) { self.time = Some(value) }
+	pub fn unset_time(&mut self) { self.time = None }
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

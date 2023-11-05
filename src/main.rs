@@ -25,10 +25,17 @@ use crossterm::terminal::{
 	enable_raw_mode,
 	is_raw_mode_enabled,
 };
-use quing::{ Error, VectorError };
-use quing::in_out::IOHandle;
-use quing::songs::Playlist;
-use quing::playback::{ Playhandle, Streams, ControlFlow };
+use quing::{
+	Error,
+	VectorError,
+	in_out::IOHandle,
+	serde::SerDePlaylist,
+	playback::{
+		Playhandle,
+		Playlist,
+		ControlFlow,
+	},
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 create_flags!{
 	#[cfg_attr(debug_assertions, derive(Debug))]
@@ -143,6 +150,10 @@ macro_rules! create_flags {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
 
+fn exit() {
+	let _ = disable_raw_mode();
+}
+
 fn main() -> Result<(), Error> {
 	panic::set_hook(
 		Box::new(|info|
@@ -165,7 +176,7 @@ fn main() -> Result<(), Error> {
 					.get(1)
 					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
 				println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
-				let _ = disable_raw_mode();
+				exit()
 			}
 		)
 	);
@@ -181,16 +192,19 @@ fn main() -> Result<(), Error> {
 			stdin()
 				.lock()
 				.lines()
-				.filter_map(Result::ok)
+				.map_while(Result::ok)
 				.map(String::from)
 		)
 	};
-	if let None = arguments.first() { panic!("get the program arguments  no arguments given") }
+	if arguments
+		.first()
+		.is_none()
+	{ panic!("get the program arguments  no arguments given") }
 	let (flags, files) = Flags::separate_from(arguments);
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 
-	let mut lists: Vec<Playlist> = Playlist::try_from_paths(files)?;
+	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(files)?;
 	if flags.should_repeat_track() {
 		let last = lists
 			.last_mut()
@@ -203,16 +217,19 @@ fn main() -> Result<(), Error> {
 			{ track.set_time(-1) }
 		}
 	}
-	if flags.should_flatten() { lists = vec![Playlist::flatten(lists)?]; }
+	if flags.should_flatten() { lists = vec![SerDePlaylist::flatten(lists)?]; }
 	let streams = lists
 		.into_iter()
-		.map(Streams::try_from)
-		.collect::<Result<Vec<Streams>, Error>>()?;
+		.map(Playlist::try_from)
+		.collect::<Result<Vec<Playlist>, Error>>()?;
 
 	let io_handle = IOHandle::try_from(is_terminal || flags.should_spawn_headless())?;
 	let mut player = Playhandle::bundle_and_streams_vector_from(io_handle, streams)?;
 	match player.all_streams_play()? {
-		ControlFlow::Break => return Ok(()),
+		ControlFlow::Break => {
+			exit();
+			return Ok(())
+		},
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
 		ControlFlow::Default => { },
 	}
@@ -224,7 +241,7 @@ fn main() -> Result<(), Error> {
 		controls.exit_notify();
 		controls.clean_up();
 	}
-	let _ = disable_raw_mode();
+	exit();
 	Ok(())
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -31,8 +31,7 @@ use std::{
 	Formatter,
 	Debug,
 };
-use super::TICK;
-use super::Error;
+use super::{ TICK, Error };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
 ///
@@ -85,17 +84,17 @@ pub struct Controls {
 #[repr(u8)]
 /// High level control signal representation.
 pub enum Signal {
-	PlaylistNext	= 0b000001_01,
-	PlaylistBack	= 0b000001_10,
-	Exit		= 0b000001_11,
+	PlaylistNext	= 0b0000_0101,
+	PlaylistBack	= 0b0000_0110,
+	Exit		= 0b0000_0111,
 
-	TrackNext	= 0b000010_01,
-	TrackBack	= 0b000010_10,
-	Play		= 0b000010_11,
+	TrackNext	= 0b0000_1001,
+	TrackBack	= 0b0000_1010,
+	Play		= 0b0000_1011,
 
-	VolumeIncrease	= 0b000011_01,
-	VolumeDecrease	= 0b000011_10,
-	Mute		= 0b000011_11,
+	VolumeIncrease	= 0b0000_1101,
+	VolumeDecrease	= 0b0000_1110,
+	Mute		= 0b0000_1111,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
@@ -106,6 +105,9 @@ impl IOHandle {
 			.as_ref()
 	}
 
+	/// Get a reference to the [output-stream]
+	///
+	/// [output-stream]: OutputStreamHandle
 	pub fn sound_out_handle_get(&self) -> &OutputStreamHandle {
 		&self
 			.sound_out
@@ -116,6 +118,7 @@ impl IOHandle {
 	pub fn controls_take(self) -> Option<Controls> { self.controls }
 
 	#[inline]
+	/// Get a reference
 	pub fn playback_get(&self) -> &Sink { &self.playback }
 
 	/// Play a single source.
@@ -158,7 +161,10 @@ impl TryFrom<bool> for IOHandle {
 
 								_ => continue,
 							};
-							if let Err(_) = signal_sender.send(signal) { panic!("send a signal to the playback  {DISCONNECTED}") }
+							if signal_sender
+								.send(signal)
+								.is_err()
+							{ panic!("send a signal to the playback  {DISCONNECTED}") }
 						}
 					),
 					exit_notifier,
@@ -247,53 +253,4 @@ impl Controls {
 			.recv_deadline(moment + TICK)
 	}
 }
-// impl Control {
-// 	/// Manage the playlist's playback or program.
-// 	pub(crate) fn manage(self, elapsed: Duration) -> Instruction {
-// 		match self.0 {
-// 			Signal::Increment => Instruction::Next,
-// 			Signal::Decrement => if elapsed <= Duration::from_secs(1) { return Instruction::Back } else { return Instruction::Hold },
-// 			Signal::Toggle => {
-// 				clear();
-// 				Instruction::Exit
-// 			},
-// 		}
-// 	}
-// }
-
-// impl Other {
-// 	/// Manage the track's playback.
-// 	/// 
-// 	/// # Values:
-// 	/// - [`true`]: It signals that the track-loop should return a [`Hold`] [`Instruction`].
-// 	/// - [`false`]: It signifies the exact opposite.
-// 	///
-// 	/// [`Hold`]: crate::songs::Instruction::Hold
-// 	pub(crate) fn manage(self, playback: &Sink, elapsed: Duration, songs_index: &mut usize) -> bool {
-// 		match self.0 {
-// 			Signal::Increment => *songs_index += 1,
-// 			Signal::Decrement => *songs_index -= (*songs_index > 0 && elapsed <= Duration::from_secs(1)) as usize,
-
-// 			Signal::Toggle => {
-// 				if playback.is_paused() { playback.play() } else { playback.pause() }
-// 				return false
-// 			},
-// 		}
-// 		true
-// 	}
-// }
-
-// impl Shift {
-// 	/// Manage the program's volume.
-// 	pub(crate) fn manage(self, playback: &Sink, now: Instant, volume: &mut f32) -> Duration {
-// 		match self.0 {
-// 			Signal::Increment => *volume += 0.05,
-// 			Signal::Decrement => *volume -= 0.05,
-// 		}
-// 		*volume = volume.clamp(-1.0, 2.0);
-// 		playback.set_volume(volume.clamp(0.0, 2.0));
-// 		if playback.is_paused() { return Duration::ZERO }
-// 		now.elapsed()
-// 	}
-// }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
