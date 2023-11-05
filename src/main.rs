@@ -215,7 +215,7 @@ fn main() {
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
 	let is_terminal = stdin().is_terminal();
-	if is_terminal {
+	if !is_terminal {
 		arguments.reserve(16);
 		arguments.extend(
 			stdin()
