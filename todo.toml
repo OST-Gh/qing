@@ -24,3 +24,7 @@ group = "features"
 [[todo]]
 name = "crate a long name flag part (idk how)"
 group = "features"
+
+[[todo]]
+name = "update docs"
+group = "global"

@@ -28,7 +28,6 @@ use crossterm::terminal::{
 use quing::{
 	Error,
 	VectorError,
-	in_out::IOHandle,
 	serde::SerDePlaylist,
 	playback::{
 		Playhandle,
@@ -54,7 +53,7 @@ create_flags!{
 	/// [`character`]: char
 	[[Flags]]
 
-	/// Wether if the program should create a control-thread, or not.
+	/// Don't use this option.
 	should_spawn_headless = 'h'
 
 	/// If the program should merge all given [`Playlists`] into one.
@@ -180,19 +179,23 @@ fn main() -> Result<(), Error> {
 			}
 		)
 	);
-	if !is_raw_mode_enabled().is_ok_and(identity) { let _ = enable_raw_mode(); }
 
-	let is_terminal = stdin().is_terminal();
 	let mut arguments: Vec<String> = args()
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
+	let is_terminal = stdin().is_terminal();
 	if !is_terminal {
 		arguments.reserve(16);
 		arguments.extend(
 			stdin()
 				.lock()
 				.lines()
-				.map_while(Result::ok)
+				.map_while(|result|
+					result
+						.as_ref()
+						.map_or(false, |line| !line.is_empty())
+						.then(|| result.unwrap())
+				)
 				.map(String::from)
 		)
 	};
@@ -203,6 +206,9 @@ fn main() -> Result<(), Error> {
 	let (flags, files) = Flags::separate_from(arguments);
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
+	if !flags.should_spawn_headless() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
+		let _ = enable_raw_mode();
+	}
 
 	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(files)?;
 	if flags.should_repeat_track() {
@@ -223,8 +229,7 @@ fn main() -> Result<(), Error> {
 		.map(Playlist::try_from)
 		.collect::<Result<Vec<Playlist>, Error>>()?;
 
-	let io_handle = IOHandle::try_from(is_terminal || flags.should_spawn_headless())?;
-	let mut player = Playhandle::bundle_and_streams_vector_from(io_handle, streams)?;
+	let mut player = Playhandle::try_from(streams)?;
 	match player.all_streams_play()? {
 		ControlFlow::Break => {
 			exit();
@@ -232,15 +237,13 @@ fn main() -> Result<(), Error> {
 		},
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
 		ControlFlow::Default => { },
-	}
+	};
 
-	if let Some(controls) = player
+	let controls = player
 		.io_handle_take()
-		.controls_take()
-	{
-		controls.exit_notify();
-		controls.clean_up();
-	}
+		.controls_take();
+	controls.exit_notify();
+	controls.clean_up();
 	exit();
 	Ok(())
 }

@@ -33,7 +33,7 @@ impl SerDePlaylist {
 	pub fn time_set(&mut self, value: isize) { self.time = Some(value) }
 	pub fn time_unset(&mut self) { self.time = None }
 
-	/// Filter out [`Playlist`] [`files`] from audio [`files`].
+	/// Filter out [`SerDePlaylist`] [`files`] from audio [`files`].
 	///
 	/// This function returns a [`Vec`] that contains all successfully parsed playlists.\
 	/// The last item of the [`Vec`] is the so called outlier, items of the [`Iterator`] that could not be parsed to a playlist, and so are treated as tracks instead.
@@ -68,9 +68,9 @@ impl SerDePlaylist {
 		)
 	}
 
-	/// Merge a list of [`Playlists`] into a single [`Playlist`].
+	/// Merge a list of [`SerDePlaylists`] into a single [`SerDePlaylist`].
 	///
-	/// [`Playlists`]: Playlist
+	/// [`SerDePlaylists`]: SerDePlaylist
 	pub fn flatten(lists: Vec<Self>) -> Result<Self, Error> {
 		let repeats = lists
 			.iter()
@@ -90,9 +90,12 @@ impl SerDePlaylist {
 		)
 	}
 
-	/// [`is_empty`] delegate
+	#[inline(always)]
+	/// Find out if a [`SerDePlaylist`] is empty.
 	///
-	/// [`is_empty`]: Vec::is_empty
+	/// This function is equal to a [`Vec.is_empty()`] call.
+	///
+	/// [`Vec.is_empty()`]: Vec.is_empty
 	pub fn is_empty(&self) -> bool {
 		self
 			.song

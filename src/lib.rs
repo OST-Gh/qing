@@ -16,10 +16,12 @@ use toml::de::Error as TOMLError;
 /// A module for handling and interacting with external devices.
 pub mod in_out;
 
-/// A collection of file related structures, or implementations.
+/// SerDe, specifically: TOML, based structure representations of the structures of [`playback`].
 pub mod serde;
 
-/// IDK man.
+/// The module responsible for handling the playing of [sources]
+///
+/// [sources]: rodio::Source
 pub mod playback;
 
 /// Implementation utilities.
@@ -28,24 +30,22 @@ pub mod utilities;
 /// Constant signal [`Duration`] (tick rate). [250 milliseconds]
 ///
 /// Every time related operation is tackted after this constant.\
-const TICK: Duration = Duration::from_millis(250);
+pub const TICK: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Error, Debug)]
+/// Errors encountered when
+#[doc = env!("CARGO_PKG_NAME")]
+/// interacts with [`Vec`]-esque structures.
 pub enum VectorError {
 	#[error("Index out of bounds")]
+	/// Overflowing an index, because underflowing an [unsigned integer] based index is impossible.
+	///
+	/// [unsigned integer]: usize
 	OutOfBounds,
 
 	#[error("Empty vector encountered.")]
+	/// As the name sais.
 	EmptyVector,
-}
-
-#[derive(Error, Debug)]
-pub enum UnwrapError {
-	#[error("Invalid option version caught.")]
-	InvalidOption,
-
-	#[error("Channel disconnected.")]
-	ChannelDisconnect,
 }
 
 #[derive(Error, Debug)]
@@ -72,7 +72,10 @@ pub enum Error {
 	#[error("Vector: {0}")]
 	Vector(#[from] VectorError),
 
-	#[error("Unwrap: {0}")]
-	Unwrap(#[from] UnwrapError),
+	#[error("Channel disconnected.")]
+	ChannelDisconnect,
+
+	#[error("Caught a null pointer.")]
+	NullPointer,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -41,27 +41,16 @@ const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Bundled In- and Output constructs.
 ///
-/// The values, that the structure holds, will be initialised if the program successfully loads at least a single playlist.\
-/// This generally means that this type is always contained inside of a wrapper type, that can be uninitialised (e.g: A [`OnceCell`]).
-///
-/// # Basic usage:
+/// # Basic usage
 ///
 /// ```rust
-///#use std::cell::OnceCell;
-///#use crate::in_out::Bundle;
-///
-/// let maybe_bundle = OnceCell::new();
-/// /* load stuff */
-///
-/// let bundle = bundle.get_or_init(Bundle::new);
+/// # use crate::in_out::IOHandle;
+/// let handle = IOHandle::try_new().unwrap();
 /// /* do stuff */
 /// ```
-/// This example uses a [`OnceCell`].
-///
-/// [`OnceCell`]: std::cell::OnceCell
 pub struct IOHandle {
 	sound_out: (OutputStream, OutputStreamHandle), // NOTE(by: @OST-Gh): Needs to be tuple, otherwise breaks
-	controls: Option<Controls>,
+	controls: Controls,
 	playback: Sink,
 }
 
@@ -98,12 +87,13 @@ pub enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
+	#[inline]
 	/// Get a reference to the underlying control structure.
-	pub fn controls_get(&self) -> Option<&Controls> {
-		self
-			.controls
-			.as_ref()
-	}
+	pub fn controls_get(&self) -> &Controls { &self.controls }
+
+	#[inline]
+	/// Take the underlying [`Controls`].
+	pub fn controls_take(self) -> Controls { self.controls }
 
 	/// Get a reference to the [output-stream]
 	///
@@ -114,14 +104,16 @@ impl IOHandle {
 			.1
 	}
 
-	/// Take the underlying controls.
-	pub fn controls_take(self) -> Option<Controls> { self.controls }
-
 	#[inline]
-	/// Get a reference
+	/// Get a reference to the underlying internal [`Sink`]
+	///
+	/// [`Sink`]: Sink
 	pub fn playback_get(&self) -> &Sink { &self.playback }
 
 	/// Play a single source.
+	///
+	/// A source is a read-, seekable, syncronous source of bytes, that can be interpreted as a common file encoding.\
+	/// See [`Decoder`]'s new associated functions.
 	pub fn stream_play(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<(), Error> {
 		let decoder = Decoder::new(source)?;
 		self
@@ -129,49 +121,43 @@ impl IOHandle {
 			.append(decoder);
 		Ok(())
 	}
-}
 
-impl TryFrom<bool> for IOHandle {
-	type Error = Error;
-
-	/// Create a new [`Bundle`] with an optional control-thread.
-	fn try_from(is_headless: bool) -> Result<Self, Error> {
+	/// Create a new [`IOHandle`] with an optional control-thread.
+	pub fn try_new() -> Result<Self, Error> {
 		let sound_out = rodio::OutputStream::try_default()?;
 
-		let controls = is_headless.then(||
-			{
-				let (signal_sender, signal_receiver) = channel::unbounded();
-				let (exit_notifier, exit_receiver) = channel::unbounded();
-				Controls {
-					control_thread: thread::spawn(move ||
-						while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-							if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-							let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-								Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-								Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-								Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
+		let controls = {
+			let (signal_sender, signal_receiver) = channel::unbounded();
+			let (exit_notifier, exit_receiver) = channel::unbounded();
+			Controls {
+				control_thread: thread::spawn(move ||
+					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
+						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+							Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+							Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+							Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
 
-								Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
-								Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
-								Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
+							Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
+							Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
+							Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
 
-								Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
-								Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
-								Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
+							Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
+							Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
+							Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
 
-								_ => continue,
-							};
-							if signal_sender
-								.send(signal)
-								.is_err()
-							{ panic!("send a signal to the playback  {DISCONNECTED}") }
-						}
-					),
-					exit_notifier,
-					signal_receiver,
-				}
+							_ => continue,
+						};
+						if signal_sender
+							.send(signal)
+							.is_err()
+						{ panic!("send a signal to the playback  {DISCONNECTED}") }
+					}
+				),
+				exit_notifier,
+				signal_receiver,
 			}
-		);
+		};
 
 		let playback = Sink::try_new(&sound_out.1)?;
 		playback.pause();
@@ -199,25 +185,23 @@ impl Debug for IOHandle {
 impl Controls {
 	/// Clean up a (hopefully done) control thread.
 	///
-	/// Supposed to be used in conjunction with [`notify_exit`].
+	/// Supposed to be used in conjunction with [`exit_notify`].
 	///
 	/// # Basic usage:
 	///
 	/// ```rust
-	///#use crate::in_out::Bundle;
-	///
-	/// let bundle = Bundle::new();
+	/// # use crate::in_out::IOHandle;
+	/// let handle = IOHandle::new();
 	/// /* do stuff */
 	///
-	/// if let Some(controls) = bundle.take_controls() {
-	///     controls.notify_exit();
-	///     controls.clean_up()
-	/// }
+	/// let controls = handle.take_controls();
+	/// controls.notify_exit();
+	/// controls.clean_up()
 	/// ```
-	/// Used things: [`notify_exit`], [`Bundle`], and [`take_controls`].
+	/// Used things: [`exit_notify`], [`IOHandle`], and [`controls_take`].
 	///
-	/// [`notify_exit`]: Self::notify_exit
-	/// [`take_controls`]: Bundle::take_controls
+	/// [`exit_notify`]: Self.exit_notify
+	/// [`controls_take`]: IOHandle.controls_take
 	pub fn clean_up(self) {
 		let _ = self
 			.control_thread
@@ -230,16 +214,15 @@ impl Controls {
 	/// # Basig usage:
 	///
 	/// ```rust
-	///#use crate::in_out::Bundle;
-	///
-	/// let bundle = Bundle::new();
+	/// # use crate::in_out::IOHandle;
+	/// let handle = IOHandle::try_new().unwrap;
 	/// /* do stuff */
 	///
-	/// if let Some(control_reference) = bundle.get_controls() { control_refernce.notify_exit() }
+	/// if let Some(control_reference) = handle.controls_get() { control_refernce.notify_exit() }
 	/// ```
-	/// Used things: [`Bundle`], and [`get_controls`].
+	/// Used components: [`IOHandle`]'s [`controls_get`].
 	///
-	/// [`get_controls`]: Bundle::get_controls
+	/// [`controls_get`]: IOHandle.controls_get
 	pub fn exit_notify(&self) {
 		let _ = self
 			.exit_notifier
