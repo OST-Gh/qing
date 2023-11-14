@@ -1,4 +1,11 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//! Playback essential structures are found here.
+//!
+//! This module's structures should be able to manipulate themselves, even if they are not declared mutable.\
+//! In order to achieve that, the structures encapuslate the mutatable parts in [`Cells`].
+//!
+//! [`Cells`]: Cell
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use lofty::{
 	AudioFile,
 	read_from_path,
@@ -19,9 +26,9 @@ use std::{
 use fastrand::Rng;
 use crossbeam_channel::RecvTimeoutError;
 use super::{
-	TICK,
 	Error,
 	VectorError,
+	ChannelError,
 	serde::{ SerDeTrack, SerDePlaylist },
 	in_out::{ IOHandle, Signal },
 	utilities::{ clear, fmt_path },
@@ -29,7 +36,13 @@ use super::{
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const STEP: f32 = 0.05;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// 
+/// A collection of [`Tracks`].
+///
+/// This structure maintains two [`Vecs`]:
+/// - one pointer-map that is used to map 
+///
+/// [`Tracks`]: Track
+/// [`Vecs`]: Vec
 pub struct Playlist {
 	/// Map of indexes that map directly to the vector of [`streams`]
 	///
@@ -38,12 +51,10 @@ pub struct Playlist {
 
 	/// Maximum pointer offset.
 	///
-	/// Equates to [`Vec.len()`].
+	/// Equates to [`len`].
 	///
-	/// [`Vec.len()`]: Vec::len
+	/// [`len`]: Vec::len
 	length: usize,
-
-	///
 	tracks: Vec<Track>,
 	repeats: Cell<isize>,
 }
@@ -66,8 +77,9 @@ pub struct Playhandle {
 	current_playlist_index: Cell<usize>,
 
 	has_reached_current_playlist_end: Cell<bool>,
+	has_reached_entire_end: Cell<bool>,
 
-	streams_vector: Vec<Playlist>,
+	playlists: Vec<Playlist>,
 
 	/// Global volume.
 	volume: Cell<f32>,
@@ -78,15 +90,17 @@ pub struct Playhandle {
 	io_handle: IOHandle,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[derive(Default)]
-/// I have no clue why.
+/// Singals returned by some crucial functions.
 ///
+/// These signals are here to indicate exit states.\
 /// # Skip-Levels
 ///
 /// A skip can have a level that denominates how many function layers it can pass through.\
 /// For example: A level 2 skip can go through function A and B, whilst a level 1 skip can only go up to A.
 pub enum ControlFlow {
+	/// Don't continue if even possible.
 	Break,
 	/// A [level] 1 skip.
 	///
@@ -96,11 +110,15 @@ pub enum ControlFlow {
 	///
 	/// [level]: Self#Skip-levels
 	SkipSkip,
+	/// The function finished without any special exceptions.
 	#[default] Default,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Playlist {
 	#[inline(always)]
+	/// Get the amount of held [`Tracks`].
+	///
+	/// [`Tracks`]: Track
 	pub fn tracks_count(&self) -> usize {
 		self
 			.tracks
@@ -108,13 +126,15 @@ impl Playlist {
 	}
 
 	#[inline(always)]
-	pub fn tracks_is_empty(&self) -> bool {
-		self
-			.tracks
-			.is_empty()
-	}
+	/// A specialisation of [`tracks_count`].
+	///
+	/// This function compares the amount of held [`Tracks`] to zero.
+	///
+	/// [`tracks_count`]: Self::tracks_count
+	/// [`Tracks`]: Track
+	pub fn tracks_is_empty(&self) -> bool { self.tracks_count() == 0 }
 
-	pub fn play_with(&self, handle: &Playhandle) -> Result<ControlFlow, Error> {
+	pub fn play_through(&self, handle: &Playhandle) -> Result<ControlFlow, Error> {
 		while handle
 			.track_index_check()
 			.is_none()
@@ -122,7 +142,7 @@ impl Playlist {
 			match unsafe {
 				self
 					.nth_unchecked(handle.track_index_get_unchecked())
-					.play_with(handle)
+					.play_through(handle)
 			} {
 				Ok(ControlFlow::Break) => return Ok(ControlFlow::Break),
 				Ok(ControlFlow::SkipSkip) => return Ok(ControlFlow::Skip),
@@ -139,12 +159,18 @@ impl Playlist {
 			self.repeats_update();
 			self.shuffle();
 			let _ = handle.track_index_try_set(|_| 0); // NOTE(by: @OST-Gh): should not error.
-			return self.play_with(handle)
+			return self.play_through(handle)
 		}
 		let _ = handle.playlist_index_try_set(|old| old + 1);
 		Ok(().into())
 	}
 
+	/// Shuffle all [`Tracks`] around.
+	///
+	/// The Shuffling works with the help of a [random number generator].
+	///
+	/// [`Tracks`]: Track
+	/// [random number generator]: Rng
 	pub fn shuffle(&self) {
 		let mut map = self
 			.track_map
@@ -202,6 +228,7 @@ impl Playlist {
 		mapped_index
 	}
 
+	#[inline]
 	/// Get the nth mapped index's [`Track`].
 	///
 	/// # Safety
@@ -219,6 +246,7 @@ impl Playlist {
 			)
 	}
 
+	#[inline]
 	/// Mutable counterpart to [`nth`]
 	///
 	/// # Safety
@@ -238,6 +266,7 @@ impl Playlist {
 			)
 	}
 
+	#[inline]
 	/// Get the nth mapped index's [`Track`] without bound checking.
 	///
 	/// # Safety
@@ -249,6 +278,7 @@ impl Playlist {
 			.get_unchecked(self.index_get_unchecked(index))
 	}
 
+	#[inline]
 	/// Mutable counterpart to [`nth_unchecked`]
 	///
 	/// # Safety
@@ -297,7 +327,7 @@ impl TryFrom<SerDePlaylist> for Playlist {
 					let (track_map, tracks): (Vec<usize>, Vec<Track>) = tuple
 						.into_iter()
 						.unzip();
-					if track_map.is_empty() { Err(VectorError::EmptyVector)? }
+					if track_map.is_empty() { Err(VectorError::Empty)? }
 					Ok(
 						Self {
 							track_map: Cell::new(track_map),
@@ -316,82 +346,77 @@ impl TryFrom<SerDePlaylist> for Playlist {
 }
 
 impl Track {
-	pub fn play_with(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
+	/// Load the file, and play it back.
+	pub fn play_through(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
 		let mut stream = Vec::with_capacity(127);
 		File::open(&self.file_path)?.read_to_end(&mut stream)?;
-		let pointer = stream.as_slice() as *const [u8];
+		data.stream_play(Cursor::new(unsafe { &*(stream.as_slice() as *const [u8]) }))?; // NOTE(by: @OST-Gh): yep, a fucking lifetime hoist via raw pointers.
 
-		data.stream_play(Cursor::new(unsafe { &*pointer }))?;
 		let controls = data
 			.io_handle_get()
 			.controls_get();
-
 		let mut whole_elapsed_time = Duration::ZERO;
-
 		let decrement: fn(usize) -> usize = |old| old - (old > 0) as usize;
 		let increment: fn(usize) -> usize = |old| old + 1;
 
 		data.playback_play();
 		while whole_elapsed_time < self.duration {
-			let moment_capture = Instant::now();
-
 			data.player_display(whole_elapsed_time)?;
-			match controls.signal_receive(moment_capture) {
-				Err(RecvTimeoutError::Timeout) => {
-					if !data.playback_is_paused() { whole_elapsed_time += TICK }
-					continue
-				},
-				Ok(Signal::PlaylistNext) => {
-					data.playback_clear();
-					clear()?;
-					data.playlist_index_try_set(increment)?;
-					return Ok(ControlFlow::SkipSkip)
-				},
-				Ok(Signal::PlaylistBack) => {
-					data.playback_clear();
-					clear()?;
-					data.playlist_index_try_set(decrement)?;
-					return Ok(ControlFlow::SkipSkip)
-				},
-				Ok(Signal::Exit) => return Ok(ControlFlow::Break),
+			let moment = Instant::now();
 
-				Ok(Signal::TrackNext) => {
+			let mut should_update_time = true;
+
+			match controls.signal_receive(moment) {
+				Err(RecvTimeoutError::Timeout) => should_update_time = !data.playback_is_paused(),
+				Ok(Signal::Exit) => {
 					data.playback_clear();
 					clear()?;
-					data.track_index_try_set(increment)?;
-					return Ok(ControlFlow::Skip)
+					return Ok(ControlFlow::Break)
 				},
-				Ok(Signal::TrackBack) => {
+
+				Ok(signal) if signal.skip_is() => {
 					data.playback_clear();
 					clear()?;
-					data.track_index_try_set(decrement)?;
+					let setter = signal
+						.next_skip_is()
+						.then_some(increment)
+						.unwrap_or(decrement);
+					signal
+						.track_skip_is()
+						.then_some::<fn(&Playhandle, fn(usize) -> usize) -> Result<(), VectorError>>(|data: &Playhandle, setter| data.track_index_try_set(setter))
+						.unwrap_or(|data: &Playhandle, setter| data.playlist_index_try_set(setter))(&data, setter)?;
 					return Ok(ControlFlow::Skip)
 				},
 				Ok(Signal::Play) => data.playback_toggle(),
 
-				Ok(Signal::VolumeIncrease) => data.volume_increment(),
-				Ok(Signal::VolumeDecrease) => data.volume_decrement(),
-				Ok(Signal::Mute) => data.volume_mute(),
+				Ok(signal) if signal.volume_is() => {
+					should_update_time = !data.playback_is_paused();
+					match signal {
+						Signal::VolumeIncrease => data.volume_increment(),
+						Signal::VolumeDecrease => data.volume_decrement(),
+						Signal::Mute => data.volume_mute(),
+						_ => unreachable!(),
+					}
+					data.volume_update()
+				},
 
-				Err(RecvTimeoutError::Disconnected) => Err(Error::ChannelDisconnect)?,
+				Ok(_) => unreachable!(),
+
+				Err(RecvTimeoutError::Disconnected) => Err(ChannelError::Disconnect)?,
 			}
 
-			data.volume_update();
-			if let Some(error) = data.playlist_index_check() { Err(error)? };
-			if let Some(error) = data.track_index_check() { Err(error)? };
-
-
-			if !data.playback_is_paused() { whole_elapsed_time += moment_capture.elapsed() }
+			if should_update_time { whole_elapsed_time += moment.elapsed() }
 		}
 		if self.repeats_can() {
 			self.repeats_update();
-			return self.play_with(data)
+			return self.play_through(data)
 		}
 		data.track_index_try_set(increment)?;
 		Ok(().into())
 	}
 
-	#[inline]
+	#[inline(always)]
+	/// wether or not a [`Track`] can repeat.
 	pub fn repeats_can(&self) -> bool {
 		self
 			.repeats
@@ -399,6 +424,7 @@ impl Track {
 	}
 
 	#[inline]
+	/// Decrement the repeat count.
 	pub fn repeats_update(&self) {
 		let old = self
 			.repeats
@@ -432,26 +458,25 @@ impl Playhandle {
 	#[inline(always)]
 	/// Count the number of held [`Playlists`].
 	///
-	/// This functions is equivalent to a [`Vec.len()`] call.
+	/// This functions is equivalent to a [`len`] call.
 	///
 	/// [`Playlists`]: Playlist
-	/// [`Vec.len()`]: Vec::len
+	/// [`len`]: Vec::len
 	pub fn entries_count(&self) -> usize {
 		self
-			.streams_vector
+			.playlists
 			.len()
 	}
 
 	#[inline(always)]
-	/// Find out if a there are any held [`Playlists`].
+	/// A specialisation of [`entries_count`].
 	///
-	/// This function is equal to a [`Vec.is_empty()`] call.
+	/// This function compares the amount of held [`Playlists`] to zero.
 	///
 	/// [`Playlists`]: Playlist
-	/// [`Vec.is_empty()`]: Vec::is_empty
 	pub fn entries_is_empty(&self) -> bool {
 		self
-			.streams_vector
+			.playlists
 			.is_empty()
 	}
 
@@ -459,6 +484,13 @@ impl Playhandle {
 	pub fn playlist_has_ended(&self) -> bool {
 		self
 			.has_reached_current_playlist_end
+			.take()
+	}
+
+	#[inline(always)]
+	pub fn all_playlists_have_ended(&self) -> bool {
+		self
+			.has_reached_entire_end
 			.take()
 	}
 
@@ -486,7 +518,7 @@ impl Playhandle {
 	/// See [`ControlFlow`] for more information on the returned data's meanings.
 	///
 	/// [`Playlists`]: Playlist
-	pub fn all_streams_play(&mut self) -> Result<ControlFlow, Error>  {
+	pub fn all_playlists_play(&mut self) -> Result<ControlFlow, Error>  {
 		while self
 			.playlist_index_check()
 			.is_none()
@@ -494,22 +526,22 @@ impl Playhandle {
 			let index = unsafe { self.playlist_index_get_unchecked() };
 			unsafe {
 				self
-					.streams_vector
+					.playlists
 					.get_unchecked_mut(index)
 					.shuffle()
 			}
 			match unsafe {
 				self
-					.streams_vector
+					.playlists
 					.get_unchecked(index)
-					.play_with(self)?
+					.play_through(self)?
 			} {
 				ControlFlow::Break => return Ok(ControlFlow::Break),
 				ControlFlow::Skip => { }, // NOTE(by: @OST-Gh): assume index math already handled.
 				ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): cannot return level-2 skip at playlist level.
 				ControlFlow::Default => clear()?,
 			}
-			if self.playlist_has_ended() { return Ok(().into()) }
+			if self.playlist_has_ended() || self.all_playlists_have_ended() { return Ok(().into()) }
 		}
 		Ok(().into())
 	}
@@ -554,7 +586,7 @@ impl Playhandle {
 		};
 		let maximum = unsafe {
 			self
-				.streams_vector
+				.playlists
 				.get_unchecked(playlist_index)
 				.tracks_count()
 		};
@@ -566,6 +598,7 @@ impl Playhandle {
 			.then_some(VectorError::OutOfBounds)
 	}
 
+	#[inline]
 	/// Get the playlist-pointer.
 	pub fn playlist_index_get(&self) -> Result<usize, VectorError> {
 		self
@@ -577,6 +610,7 @@ impl Playhandle {
 			)
 	}
 
+	#[inline]
 	/// Get the track-pointer.
 	pub fn track_index_get(&self) -> Result<usize, VectorError> {
 		self
@@ -622,7 +656,12 @@ impl Playhandle {
 		let _ = self.track_index_try_set(|_| 0);
 		let old_index = unsafe { self.playlist_index_get_unchecked() };
 		let new_index = setter(old_index);
-		if new_index >= self.entries_count() { Err(VectorError::OutOfBounds)? }
+		if new_index >= self.entries_count() {
+			self
+				.has_reached_entire_end
+				.set(true);
+			Err(VectorError::OutOfBounds)?
+		}
 		self
 			.current_playlist_index
 			.set(new_index);
@@ -645,7 +684,7 @@ impl Playhandle {
 		};
 		let maximum = unsafe {
 			self
-				.streams_vector
+				.playlists
 				.get_unchecked(playlist_index)
 				.tracks_count()
 		};
@@ -661,7 +700,9 @@ impl Playhandle {
 		Ok(())
 	}
 
+	#[inline(always)]
 	pub fn io_handle_get(&self) -> &IOHandle { &self.io_handle }
+	#[inline(always)]
 	pub fn io_handle_take(self) -> IOHandle { self.io_handle }
 
 	#[inline]
@@ -776,7 +817,7 @@ impl Playhandle {
 			.set(true)
 	}
 
-	#[inline]
+	#[inline(always)]
 	/// A high level combination of [`playback_play`] and [`playback_pause`].
 	///
 	/// [`playback_play`]: Self::playback_play
@@ -808,14 +849,16 @@ impl Playhandle {
 			.get()
 	}
 
+	/// Initialise a new instance from the input.
 	pub fn raw_parts_from(io_handle: IOHandle, streams_vector: Vec<Playlist>) -> Self {
 		Self {
 			current_track_index: Cell::new(0),
 			current_playlist_index: Cell::new(0),
 
 			has_reached_current_playlist_end: Cell::new(false),
+			has_reached_entire_end: Cell::new(false),
 
-			streams_vector,
+			playlists: streams_vector,
 		
 			volume: Cell::new(1.0),
 			paused: Cell::new(
@@ -826,6 +869,13 @@ impl Playhandle {
 
 			io_handle,
 		}
+	}
+
+	pub fn playlists_swap(&mut self, new: Vec<Playlist>) {
+		self.playback_clear();
+		self.playlists = new;
+		let _ = self.track_index_try_set(|_| 0); // NOTE(by: @OST-Gh): Pray this doesn't error
+		let _ = self.playlist_index_try_set(|_| 0);
 	}
 }
 

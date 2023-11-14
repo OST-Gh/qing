@@ -1,4 +1,4 @@
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use rodio::{
 	OutputStream,
 	OutputStreamHandle,
@@ -20,7 +20,7 @@ use crossterm::event::{
 };
 use std::{
 	time::Instant,
-	thread::{ self, JoinHandle },
+	thread::{ Builder, JoinHandle },
 	io::{
 		Seek,
 		Read,
@@ -31,7 +31,12 @@ use std::{
 	Formatter,
 	Debug,
 };
-use super::{ TICK, Error };
+
+use super::{
+	TICK,
+	Error,
+	ChannelError,
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
 ///
@@ -54,7 +59,7 @@ pub struct IOHandle {
 	playback: Sink,
 }
 
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 /// A wrapper around a thread handle.
 ///
 /// This structure bundles: The control thread handle, a sender, and a receiver.\
@@ -69,7 +74,8 @@ pub struct Controls {
 	signal_receiver: Receiver<Signal>,
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 #[repr(u8)]
 /// High level control signal representation.
 pub enum Signal {
@@ -104,12 +110,22 @@ impl IOHandle {
 			.1
 	}
 
+	#[inline(always)]
+	pub fn signal_receive(&self, moment: Instant) -> Result<Signal, Error> {
+		self
+			.controls_get()
+			.signal_receive(moment)
+			.map_err(ChannelError::from)
+			.map_err(Error::Channel)
+	}
+
 	#[inline]
 	/// Get a reference to the underlying internal [`Sink`]
 	///
 	/// [`Sink`]: Sink
 	pub fn playback_get(&self) -> &Sink { &self.playback }
 
+	#[inline]
 	/// Play a single source.
 	///
 	/// A source is a read-, seekable, syncronous source of bytes, that can be interpreted as a common file encoding.\
@@ -129,31 +145,35 @@ impl IOHandle {
 		let controls = {
 			let (signal_sender, signal_receiver) = channel::unbounded();
 			let (exit_notifier, exit_receiver) = channel::unbounded();
+			let key_handler = move ||
+			while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
+				if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+				let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+					Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+					Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+					Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
+
+					Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
+					Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
+					Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
+
+					Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
+					Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
+					Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
+
+					_ => continue,
+				};
+				if signal_sender
+					.send(signal)
+					.is_err()
+				{ panic!("send a signal to the playback  {DISCONNECTED}") }
+			};
+			let control_thread = Builder::new()
+				.name(String::from("Controls"))
+				.stack_size(8)
+				.spawn(key_handler)?;
 			Controls {
-				control_thread: thread::spawn(move ||
-					while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-						if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-						let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-							Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-							Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-							Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
-
-							Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
-							Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
-							Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
-
-							Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
-							Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
-							Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
-
-							_ => continue,
-						};
-						if signal_sender
-							.send(signal)
-							.is_err()
-						{ panic!("send a signal to the playback  {DISCONNECTED}") }
-					}
-				),
+				control_thread,
 				exit_notifier,
 				signal_receiver,
 			}
@@ -235,5 +255,31 @@ impl Controls {
 			.signal_receiver
 			.recv_deadline(moment + TICK)
 	}
+}
+
+macro_rules! pat {
+	($this: expr => $($name: ident)|+) => {
+		if let $(Self::$name)|+ = $this { true } else { false }
+	}
+}
+impl Signal {
+	#[inline(always)]
+	pub fn track_skip_is(&self) -> bool { pat!(self => TrackNext | TrackBack) }
+
+	#[inline(always)]
+	pub fn playlist_skip_is(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
+
+	#[inline(always)]
+	pub fn next_skip_is(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
+
+	#[inline(always)]
+	pub fn back_skip_is(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
+
+	#[inline(always)]
+	pub fn skip_is(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
+
+
+	#[inline(always)]
+	pub fn volume_is(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute) }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

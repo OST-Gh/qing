@@ -1,14 +1,4 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//! [I hate myself, for making documentation.]
-//!
-//! ### How Quing works.
-//! Quing works around 2 central structures:
-//! - A [`Track`]
-//! - A [`Playlist`] (grouping of [`Tracks`], with additional data)
-//!
-//! [`Track`]: songs::Track
-//! [`Tracks`]: songs::Track
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
 	panic,
 	env::args,
@@ -180,7 +170,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 	if flags.should_repeat_track() {
 		let last = lists
 			.last_mut()
-			.map_or(Err(VectorError::EmptyVector), Ok)?;
+			.map_or(Err(VectorError::Empty), Ok)?;
 		if flags.should_repeat_playlist() { last.time_set(-1) }
 		if flags.should_repeat_track() {
 			for track in last
@@ -196,7 +186,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 		.collect::<Result<Vec<Playlist>, Error>>()?;
 
 	let mut player = Playhandle::try_from(streams)?;
-	match player.all_streams_play()? {
+	match player.all_playlists_play()? {
 		ControlFlow::Break => return Ok(()),
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
 		ControlFlow::Default => { },

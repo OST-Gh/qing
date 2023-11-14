@@ -1,4 +1,15 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//! [I hate myself, for making documentation.]
+//!
+//! ### How Quing works.
+//! Quing works around 2 central structures:
+//! - A [`Track`]
+//! - A [`Playlist`] (grouping of [`Tracks`], with additional data)
+//!
+//! [`Track`]: playback::Track
+//! [`Tracks`]: playback::Track
+//! [`Playlist`]: playback::Playlist
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use thiserror::Error;
 use std::{
 	io::Error as IOError,
@@ -12,6 +23,7 @@ use rodio::{
 	StreamError,
 };
 use toml::de::Error as TOMLError;
+use crossbeam_channel::RecvTimeoutError;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 pub mod in_out;
@@ -36,6 +48,7 @@ pub const TICK: Duration = Duration::from_millis(250);
 /// Errors encountered when
 #[doc = env!("CARGO_PKG_NAME")]
 /// interacts with [`Vec`]-esque structures.
+#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 pub enum VectorError {
 	#[error("Index out of bounds")]
 	/// Overflowing an index, because underflowing an [unsigned integer] based index is impossible.
@@ -45,7 +58,16 @@ pub enum VectorError {
 
 	#[error("Empty vector encountered.")]
 	/// As the name sais.
-	EmptyVector,
+	Empty,
+}
+
+#[derive(Error, Debug)]
+#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
+pub enum ChannelError {
+	#[error("A Channel-Timeout occured.")]
+	Timeout,
+	#[error("A Channel disconnected.")]
+	Disconnect,
 }
 
 #[derive(Error, Debug)]
@@ -72,10 +94,16 @@ pub enum Error {
 	#[error("Vector: {0}")]
 	Vector(#[from] VectorError),
 
-	#[error("Channel disconnected.")]
-	ChannelDisconnect,
+	#[error("Channel: {0}")]
+	Channel(#[from] ChannelError),
+}
 
-	#[error("Caught a null pointer.")]
-	NullPointer,
+impl From<RecvTimeoutError> for ChannelError {
+	fn from(error: RecvTimeoutError) -> Self {
+		match error {
+			RecvTimeoutError::Timeout => Self::Timeout,
+			RecvTimeoutError::Disconnected => ChannelError::Disconnect,
+		}
+	}
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

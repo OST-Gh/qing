@@ -8,7 +8,8 @@ use super::{
 };
 use toml::from_str;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 #[derive(Deserialize)]
 /// A playlist with some metadata.
 pub struct SerDePlaylist {
@@ -16,7 +17,8 @@ pub struct SerDePlaylist {
 	pub(crate) time: Option<isize>,
 }
 
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
+#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 #[derive(Deserialize)]
 #[derive(Clone)]
 /// A song path with aditional metadata.
@@ -27,11 +29,11 @@ pub struct SerDeTrack {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl SerDePlaylist {
-	#[inline] pub fn song_get(&self) -> &Vec<SerDeTrack> { &self.song }
-	#[inline] pub fn song_get_mut(&mut self) -> &mut Vec<SerDeTrack> { &mut self.song }
-	#[inline] pub fn song_take(self) -> Vec<SerDeTrack> { self.song }
-	pub fn time_set(&mut self, value: isize) { self.time = Some(value) }
-	pub fn time_unset(&mut self) { self.time = None }
+	#[inline(always)] pub fn song_get(&self) -> &Vec<SerDeTrack> { &self.song }
+	#[inline(always)] pub fn song_get_mut(&mut self) -> &mut Vec<SerDeTrack> { &mut self.song }
+	#[inline(always)] pub fn song_take(self) -> Vec<SerDeTrack> { self.song }
+	#[inline(always)] pub fn time_set(&mut self, value: isize) { self.time = Some(value) }
+	#[inline(always)] pub fn time_unset(&mut self) { self.time = None }
 
 	/// Filter out [`SerDePlaylist`] [`files`] from audio [`files`].
 	///
@@ -76,7 +78,7 @@ impl SerDePlaylist {
 		let repeats = lists
 			.iter()
 			.min_by_key(|Self { time, .. }| time.unwrap_or_default())
-			.map_or(Err(VectorError::EmptyVector), Ok)?
+			.map_or(Err(VectorError::Empty), Ok)?
 			.time
 			.unwrap_or_default();
 		let tracks: Vec<SerDeTrack> = lists
@@ -113,7 +115,7 @@ impl SerDePlaylist {
 }
 
 impl SerDeTrack {
-	pub fn set_time(&mut self, value: isize) { self.time = Some(value) }
-	pub fn unset_time(&mut self) { self.time = None }
+	#[inline(always)] pub fn set_time(&mut self, value: isize) { self.time = Some(value) }
+	#[inline(always)] pub fn unset_time(&mut self) { self.time = None }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
