@@ -4,7 +4,7 @@
 //! This module's structures should be able to manipulate themselves, even if they are not declared mutable.\
 //! In order to achieve that, the structures encapuslate the mutatable parts in [`Cells`].
 //!
-//! [`Cells`]: Cell
+//! [`Cells`]: std::cell::Cell
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use lofty::{
 	AudioFile,
@@ -34,7 +34,7 @@ use super::{
 	utilities::{ clear, fmt_path },
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-const STEP: f32 = 0.05;
+const STEP: f32 = 0.025;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A collection of [`Tracks`].
 ///
@@ -67,6 +67,8 @@ pub struct Track {
 }
 
 /// The player's state.
+///
+/// This is a singleton structure, of which (preferably) only one is active at a time.
 ///
 /// # Pointers
 ///
@@ -253,7 +255,7 @@ impl Playlist {
 	///
 	/// - This function will return [`None`] if the provided index is out of bounds.
 	///
-	/// [`nth`]: Self.nth
+	/// [`nth`]: Self::nth
 	pub fn nth_mut(&mut self, index: usize) -> Option<&mut Track> {
 		self
 			.index_get(index)
@@ -473,6 +475,7 @@ impl Playhandle {
 	///
 	/// This function compares the amount of held [`Playlists`] to zero.
 	///
+	/// [`entries_count`]: Self::entries_count
 	/// [`Playlists`]: Playlist
 	pub fn entries_is_empty(&self) -> bool {
 		self
@@ -481,6 +484,11 @@ impl Playhandle {
 	}
 
 	#[inline(always)]
+	/// See if all [`Tracks`] of a [`Playlist`] have been played through.
+	///
+	/// This function is single-use.
+	///
+	/// [`Tracks`]: Track
 	pub fn playlist_has_ended(&self) -> bool {
 		self
 			.has_reached_current_playlist_end
@@ -488,6 +496,11 @@ impl Playhandle {
 	}
 
 	#[inline(always)]
+	/// See if all [`Playlists`] have been played through.
+	///
+	/// This function is single-use.
+	///
+	/// [`Playlists`]: Playlist
 	pub fn all_playlists_have_ended(&self) -> bool {
 		self
 			.has_reached_entire_end
@@ -498,15 +511,13 @@ impl Playhandle {
 	///
 	/// The default player is: `[hh:mm:ss][vol.]`
 	pub fn player_display(&self, elapsed: Duration) -> Result<(), Error> {
-		print!("\r[{}][{:>5.2}]\0",
+		print!("\r[{}][{:>6.3}]\0",
 			{
 				let seconds = elapsed.as_secs();
 				let minutes = seconds / 60;
 				format_args!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 			},
-			self
-				.volume
-				.get(),
+			self.volume_get()
 		);
 		stdout()
 			.flush()

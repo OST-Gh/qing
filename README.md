@@ -17,7 +17,6 @@ time = -1 # similar to playlist-level time, but for a single song.
 ## Flags:
 #### All flags must be passed in before the playlist files and start with a dash ('-').
 ```toml
-'h' = "to manually enter headless mode."
 'f' = "to merge all tracks, from the playlist files, into one."
 'v' = "to output some general package information."
 'p' = "repeat the composed file-playlist for ever."
@@ -36,5 +35,3 @@ time = -1 # similar to playlist-level time, but for a single song.
 'shift_j' = "Decrease the volume of the currently playing track"
 'shift_k' = "Toggle the volume of the currently playing track"
 ```
-
-<!-- ###### NOTE: all inputted playlists are loaded upon starting. all files of the playlist are loaded when it is its turn to play. the program will run in headless mode if the creation of the control thread fails. -->

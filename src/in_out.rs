@@ -44,7 +44,7 @@ use super::{
 /// [`Receiver`]: crossbeam_channel::Receiver
 const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Bundled In- and Output constructs.
+/// Singleton bundled In- and Output constructs.
 ///
 /// # Basic usage
 ///
@@ -93,14 +93,15 @@ pub enum Signal {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
-	#[inline]
+	#[inline(always)]
 	/// Get a reference to the underlying control structure.
 	pub fn controls_get(&self) -> &Controls { &self.controls }
 
-	#[inline]
+	#[inline(always)]
 	/// Take the underlying [`Controls`].
 	pub fn controls_take(self) -> Controls { self.controls }
 
+	#[inline(always)]
 	/// Get a reference to the [output-stream]
 	///
 	/// [output-stream]: OutputStreamHandle
@@ -119,13 +120,13 @@ impl IOHandle {
 			.map_err(Error::Channel)
 	}
 
-	#[inline]
+	#[inline(always)]
 	/// Get a reference to the underlying internal [`Sink`]
 	///
 	/// [`Sink`]: Sink
 	pub fn playback_get(&self) -> &Sink { &self.playback }
 
-	#[inline]
+	#[inline(always)]
 	/// Play a single source.
 	///
 	/// A source is a read-, seekable, syncronous source of bytes, that can be interpreted as a common file encoding.\
@@ -192,7 +193,7 @@ impl IOHandle {
 	}
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "debug"))]
 impl Debug for IOHandle {
 	fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
 		formatter
