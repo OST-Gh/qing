@@ -9,7 +9,7 @@ use crossbeam_channel::{
 	self as channel,
 	Sender,
 	Receiver,
-	RecvTimeoutError,
+	TryRecvError,
 };
 use crossterm::event::{
 	self,
@@ -19,12 +19,9 @@ use crossterm::event::{
 	KeyModifiers,
 };
 use std::{
-	time::Instant,
+	time::Duration,
 	thread::{ Builder, JoinHandle },
-	io::{
-		Seek,
-		Read,
-	},
+	io::{ Seek, Read },
 };
 #[cfg(debug_assertions)] use std::fmt::{
 	self,
@@ -33,7 +30,6 @@ use std::{
 };
 
 use super::{
-	TICK,
 	Error,
 	ChannelError,
 };
@@ -79,17 +75,20 @@ pub struct Controls {
 #[repr(u8)]
 /// High level control signal representation.
 pub enum Signal {
-	PlaylistNext	= 0b0000_0101,
-	PlaylistBack	= 0b0000_0110,
-	Exit		= 0b0000_0111,
+	// 1 * 2^2 + 0 * 2^3
+	PlaylistNext	= 0b0101, // 1 * 2^0 + 0 * 2^3
+	PlaylistBack	= 0b0110, // 0 * 2^0 + 1 * 2^3
+	Exit		= 0b0111, // 1 * 2^0 + 1 * 2^3
 
-	TrackNext	= 0b0000_1001,
-	TrackBack	= 0b0000_1010,
-	Play		= 0b0000_1011,
+	// 0 * 2^2 + 1 * 2^3
+	TrackNext	= 0b1001, // 1 * 2^0 + 0 * 2^3
+	TrackBack	= 0b1010, // 0 * 2^0 + 1 * 2^3
+	Play		= 0b1011, // 1 * 2^0 + 1 * 2^3
 
-	VolumeIncrease	= 0b0000_1101,
-	VolumeDecrease	= 0b0000_1110,
-	Mute		= 0b0000_1111,
+	// 1 * 2^2 + 1 * 2^3
+	VolumeIncrease	= 0b1101, // 1 * 2^0 + 0 * 2^3
+	VolumeDecrease	= 0b1110, // 0 * 2^0 + 1 * 2^3
+	Mute		= 0b1111, // 1 * 2^0 + 1 * 2^3
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
@@ -112,10 +111,10 @@ impl IOHandle {
 	}
 
 	#[inline(always)]
-	pub fn signal_receive(&self, moment: Instant) -> Result<Signal, Error> {
+	pub fn signal_receive(&self) -> Result<Signal, Error> {
 		self
 			.controls_get()
-			.signal_receive(moment)
+			.signal_receive()
 			.map_err(ChannelError::from)
 			.map_err(Error::Channel)
 	}
@@ -143,41 +142,39 @@ impl IOHandle {
 	pub fn try_new() -> Result<Self, Error> {
 		let sound_out = rodio::OutputStream::try_default()?;
 
-		let controls = {
-			let (signal_sender, signal_receiver) = channel::unbounded();
-			let (exit_notifier, exit_receiver) = channel::unbounded();
-			let key_handler = move ||
-			while let Err(RecvTimeoutError::Timeout) = exit_receiver.recv_timeout(TICK) {
-				if !event::poll(TICK).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
-				let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
-					Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
-					Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-					Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
+		let (signal_sender, signal_receiver) = channel::unbounded();
+		let (exit_notifier, exit_receiver) = channel::unbounded();
+		let key_handler = move ||
+		while let Err(TryRecvError::Empty) = exit_receiver.try_recv() {
+			if !event::poll(Duration::ZERO).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+			let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
+				Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
+				Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
+				Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
 
-					Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
-					Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
-					Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
+				Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
+				Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
+				Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
 
-					Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
-					Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
-					Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
+				Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
+				Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
+				Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
 
-					_ => continue,
-				};
-				if signal_sender
-					.send(signal)
-					.is_err()
-				{ panic!("send a signal to the playback  {DISCONNECTED}") }
+				_ => continue,
 			};
-			let control_thread = Builder::new()
-				.name(String::from("Controls"))
-				.stack_size(8)
-				.spawn(key_handler)?;
-			Controls {
-				control_thread,
-				exit_notifier,
-				signal_receiver,
-			}
+			if signal_sender
+				.send(signal)
+				.is_err()
+			{ panic!("send a signal to the playback  {DISCONNECTED}") }
+		};
+		let control_thread = Builder::new()
+			.name(String::from("Controls"))
+			.stack_size(8)
+			.spawn(key_handler)?;
+		let controls = Controls {
+			control_thread,
+			exit_notifier,
+			signal_receiver,
 		};
 
 		let playback = Sink::try_new(&sound_out.1)?;
@@ -251,10 +248,10 @@ impl Controls {
 	}
 
 	/// Try to receive a signal, by waiting for it for a set amount of time.
-	pub fn signal_receive(&self, moment: Instant) -> Result<Signal, RecvTimeoutError> {
+	pub fn signal_receive(&self) -> Result<Signal, TryRecvError> {
 		self
 			.signal_receiver
-			.recv_deadline(moment + TICK)
+			.try_recv()
 	}
 }
 
@@ -265,22 +262,22 @@ macro_rules! pat {
 }
 impl Signal {
 	#[inline(always)]
-	pub fn track_skip_is(&self) -> bool { pat!(self => TrackNext | TrackBack) }
+	pub fn is_track_skip(&self) -> bool { pat!(self => TrackNext | TrackBack) }
 
 	#[inline(always)]
-	pub fn playlist_skip_is(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
+	pub fn is_playlist_skip(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
 
 	#[inline(always)]
-	pub fn next_skip_is(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
+	pub fn is_next_skip(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
 
 	#[inline(always)]
-	pub fn back_skip_is(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
+	pub fn is_back_skip(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
 
 	#[inline(always)]
-	pub fn skip_is(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
+	pub fn is_skip(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
 
 
 	#[inline(always)]
-	pub fn volume_is(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute) }
+	pub fn is_volume(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute) }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

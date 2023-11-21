@@ -13,7 +13,6 @@
 use thiserror::Error;
 use std::{
 	io::Error as IOError,
-	time::Duration,
 	env::VarError,
 };
 use lofty::LoftyError;
@@ -23,7 +22,10 @@ use rodio::{
 	StreamError,
 };
 use toml::de::Error as TOMLError;
-use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::{
+	RecvTimeoutError,
+	TryRecvError,
+};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 pub mod in_out;
@@ -38,11 +40,6 @@ pub mod playback;
 
 /// Implementation utilities.
 pub mod utilities;
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// Constant signal [`Duration`] (tick rate). [250 milliseconds]
-///
-/// Every time related operation is tackted after this constant.
-pub const TICK: Duration = Duration::from_millis(250);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Error, Debug)]
 /// Errors encountered when
@@ -66,6 +63,8 @@ pub enum VectorError {
 pub enum ChannelError {
 	#[error("A Channel-Timeout occured.")]
 	Timeout,
+	#[error("A CHannel is empty.")]
+	Empty,
 	#[error("A Channel disconnected.")]
 	Disconnect,
 }
@@ -102,7 +101,16 @@ impl From<RecvTimeoutError> for ChannelError {
 	fn from(error: RecvTimeoutError) -> Self {
 		match error {
 			RecvTimeoutError::Timeout => Self::Timeout,
-			RecvTimeoutError::Disconnected => ChannelError::Disconnect,
+			RecvTimeoutError::Disconnected => Self::Disconnect,
+		}
+	}
+}
+
+impl From<TryRecvError> for ChannelError {
+	fn from(error: TryRecvError) -> Self {
+		match error {
+			TryRecvError::Empty => Self::Empty,
+			TryRecvError::Disconnected => Self::Disconnect,
 		}
 	}
 }

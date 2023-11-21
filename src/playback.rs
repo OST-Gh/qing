@@ -14,6 +14,7 @@ use std::{
 	fs::File,
 	path::PathBuf,
 	cell::Cell,
+	thread::sleep,
 	time::{ Duration, Instant },
 	io::{
 		Cursor,
@@ -24,7 +25,7 @@ use std::{
 	},
 };
 use fastrand::Rng;
-use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::TryRecvError;
 use super::{
 	Error,
 	VectorError,
@@ -363,36 +364,34 @@ impl Track {
 
 		data.playback_play();
 		while whole_elapsed_time < self.duration {
-			data.player_display(whole_elapsed_time)?;
 			let moment = Instant::now();
+			data.player_display(whole_elapsed_time)?;
 
-			let mut should_update_time = true;
-
-			match controls.signal_receive(moment) {
-				Err(RecvTimeoutError::Timeout) => should_update_time = !data.playback_is_paused(),
+			sleep(Duration::from_nanos(1)); // NOTE(by: @OST-Gh): for some reason: without this, the player's time won't update.
+			match controls.signal_receive() {
+				Err(TryRecvError::Empty) => { },
 				Ok(Signal::Exit) => {
 					data.playback_clear();
 					clear()?;
 					return Ok(ControlFlow::Break)
 				},
 
-				Ok(signal) if signal.skip_is() => {
+				Ok(signal) if signal.is_skip() => {
 					data.playback_clear();
 					clear()?;
 					let setter = signal
-						.next_skip_is()
+						.is_next_skip()
 						.then_some(increment)
 						.unwrap_or(decrement);
 					signal
-						.track_skip_is()
+						.is_track_skip()
 						.then_some::<fn(&Playhandle, fn(usize) -> usize) -> Result<(), VectorError>>(|data: &Playhandle, setter| data.track_index_try_set(setter))
 						.unwrap_or(|data: &Playhandle, setter| data.playlist_index_try_set(setter))(&data, setter)?;
 					return Ok(ControlFlow::Skip)
 				},
 				Ok(Signal::Play) => data.playback_toggle(),
 
-				Ok(signal) if signal.volume_is() => {
-					should_update_time = !data.playback_is_paused();
+				Ok(signal) if signal.is_volume() => {
 					match signal {
 						Signal::VolumeIncrease => data.volume_increment(),
 						Signal::VolumeDecrease => data.volume_decrement(),
@@ -404,10 +403,10 @@ impl Track {
 
 				Ok(_) => unreachable!(),
 
-				Err(RecvTimeoutError::Disconnected) => Err(ChannelError::Disconnect)?,
+				Err(TryRecvError::Disconnected) => Err(ChannelError::Disconnect)?,
 			}
 
-			if should_update_time { whole_elapsed_time += moment.elapsed() }
+			if !data.playback_is_paused() { whole_elapsed_time += moment.elapsed() }
 		}
 		if self.repeats_can() {
 			self.repeats_update();
@@ -517,7 +516,7 @@ impl Playhandle {
 				let minutes = seconds / 60;
 				format_args!("{:0>2}:{:0>2}:{:0>2}", minutes / 60, minutes % 60, seconds % 60)
 			},
-			self.volume_get()
+			self.volume_get_raw(),
 		);
 		stdout()
 			.flush()
@@ -529,17 +528,19 @@ impl Playhandle {
 	/// See [`ControlFlow`] for more information on the returned data's meanings.
 	///
 	/// [`Playlists`]: Playlist
-	pub fn all_playlists_play(&mut self) -> Result<ControlFlow, Error>  {
+	pub fn all_playlists_play(&mut self, should_shuffle: bool) -> Result<ControlFlow, Error>  {
 		while self
 			.playlist_index_check()
 			.is_none()
 		{
 			let index = unsafe { self.playlist_index_get_unchecked() };
-			unsafe {
-				self
-					.playlists
-					.get_unchecked_mut(index)
-					.shuffle()
+			if should_shuffle {
+				unsafe {
+					self
+						.playlists
+						.get_unchecked_mut(index)
+						.shuffle()
+				}
 			}
 			match unsafe {
 				self
@@ -722,9 +723,15 @@ impl Playhandle {
 	/// This function is clamping the internal [`f32`], volume between 0 and 2.
 	pub fn volume_get(&self) -> f32 {
 		self
+			.volume_get_raw()
+			.clamp(0.0, 2.0)
+	}
+
+	#[inline]
+	pub fn volume_get_raw(&self) -> f32 {
+		self
 			.volume
 			.get()
-			.clamp(0.0, 2.0)
 	}
 
 	#[inline]
@@ -734,25 +741,18 @@ impl Playhandle {
 	pub fn volume_set(&self, map: impl FnOnce(f32) -> f32) {
 		self
 			.volume
-			.set(map(self.volume_get()).clamp(-1.0, 2.0))
+			.set(map(self.volume_get()))
 	}
 
-	#[inline]
+	#[inline(always)]
 	/// Set the volume based on the raw internal [`f32`].
 	pub fn volume_set_raw(&self, map: impl FnOnce(f32) -> f32) {
 		self
 			.volume
-			.set(
-				map(
-					self
-						.volume
-						.get()
-				)
-					.clamp(-1.0, 2.0)
-			)
+			.set(map(self.volume_get_raw()))
 	}
 
-	#[inline]
+	#[inline(always)]
 	/// A low level mute function.
 	///
 	/// Call [`volume_update`] to take effect.
@@ -760,7 +760,7 @@ impl Playhandle {
 	/// [`volume_update`]: Self::volume_update
 	pub fn volume_mute(&self) { self.volume_set_raw(|old| old + 2.0 * -old) }
 
-	#[inline]
+	#[inline(always)]
 	/// A low level dial up function.
 	///
 	/// Counterpart: [`volume_decrement`].
@@ -771,7 +771,7 @@ impl Playhandle {
 	/// [`volume_update`]: Self::volume_update
 	pub fn volume_increment(&self) { self.volume_set_raw(|old| old + STEP) }
 
-	#[inline]
+	#[inline(always)]
 	/// A low level dial down function.
 	///
 	/// Counterpart: [`volume_increment`].

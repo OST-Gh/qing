@@ -1,19 +1,26 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use std::{
-	panic,
+	panic::{ self, PanicInfo },
+	process::ExitCode,
+	iter::Peekable,
 	env::args,
 	convert::identity,
 	ops::{ Deref, DerefMut },
 	io::{
 		stdin,
+		stdout,
 		BufRead,
 		IsTerminal,
 	},
 };
-use crossterm::terminal::{
-	disable_raw_mode,
-	enable_raw_mode,
-	is_raw_mode_enabled,
+use crossterm::{
+	execute,
+	cursor::{ Hide, Show },
+	terminal::{
+		disable_raw_mode,
+		enable_raw_mode,
+		is_raw_mode_enabled,
+	},
 };
 use quing::{
 	Error,
@@ -59,6 +66,9 @@ create_flags!{
 
 	/// Wether or not the program should output some information.
 	should_print_version = 'v'
+
+	/// If every playlist should not be shuffled.
+	should_not_shuffle = 'n'
 
 	[const]
 	/// A set made up of each flag identifier.
@@ -140,31 +150,29 @@ macro_rules! create_flags {
 fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
 
 fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Error> {
-	panic::set_hook(
-		Box::new(|info|
-			unsafe {
-				let payload = info.payload();
-				let panic = payload
-					.downcast_ref::<&str>()
-					.map(|slice| String::from(*slice))
-					.xor(
-						payload
-							.downcast_ref::<String>()
-							.map(String::from)
-					)
-					.unwrap();
-				let panic = panic
-					.splitn(2, "  ")
-					.collect::<Vec<&str>>();
-				let message = panic.get_unchecked(0);
-				let reason = panic
-					.get(1)
-					.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
-				println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
-				let _ = disable_raw_mode();
-			}
-		)
-	);
+	let new_hook =  |info: &PanicInfo|
+	unsafe {
+		let payload = info.payload();
+		let panic = payload
+			.downcast_ref::<&str>()
+			.map(|slice| String::from(*slice))
+			.xor(
+				payload
+					.downcast_ref::<String>()
+					.map(String::from)
+			)
+			.unwrap();
+		let panic = panic
+			.splitn(2, "  ")
+			.collect::<Vec<&str>>();
+		let message = panic.get_unchecked(0);
+		let reason = panic
+			.get(1)
+			.unwrap_or(&"NO_DISPLAYABLE_INFORMATION");
+		println!("\rAn error occurred whilst attempting to {message}; '{reason}'");
+		let _ = disable_raw_mode();
+	};
+	panic::set_hook(Box::new(new_hook));
 
 	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(arguments)?;
 	if flags.should_repeat_track() {
@@ -186,7 +194,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 		.collect::<Result<Vec<Playlist>, Error>>()?;
 
 	let mut player = Playhandle::try_from(streams)?;
-	match player.all_playlists_play()? {
+	match player.all_playlists_play(!flags.should_not_shuffle())? {
 		ControlFlow::Break => return Ok(()),
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
 		ControlFlow::Default => { },
@@ -200,7 +208,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 	Ok(())
 }
 
-fn main() {
+fn main() -> ExitCode {
 	let mut arguments: Vec<String> = args()
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
@@ -220,25 +228,27 @@ fn main() {
 				.map(String::from)
 		)
 	};
-	if arguments
-		.first()
+	let (flags, mut files) = Flags::separate_from(arguments);
+	if files
+		.peek()
 		.is_none()
 	{
 		println!("No input given.");
-		return
+		return 1.into();
 	}
 
-	let (flags, files) = Flags::separate_from(arguments);
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 	if !flags.should_spawn_headless() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
 		let _ = enable_raw_mode();
+		let _ = execute!(stdout(), Hide);
 	}
 
 	let result = run(files, flags);
-
+	let _ = execute!(stdout(), Show);
 	let _ = disable_raw_mode();
 	if let Err(error) = result { println!("{error}") }
+	0.into()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Flags {
@@ -251,7 +261,7 @@ impl Flags {
 	/// # Panics:
 	///
 	/// - Arguments are empty.
-	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, impl Iterator<Item = String>) {
+	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, Peekable<impl Iterator<Item = String>>) {
 		let mut flag_count = 0;
 		let bits = iterator
 			.iter()
@@ -280,6 +290,7 @@ impl Flags {
 			iterator
 				.into_iter()
 				.skip(flag_count)
+				.peekable()
 		)
 	}
 }
