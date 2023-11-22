@@ -137,7 +137,8 @@ impl Playlist {
 	/// [`Tracks`]: Track
 	pub fn tracks_is_empty(&self) -> bool { self.tracks_count() == 0 }
 
-	pub fn play_through(&self, handle: &Playhandle) -> Result<ControlFlow, Error> {
+	// TODO(by: @OST-Gh): maybe incooperate should_shuffle into playhandle...
+	pub fn play_through(&self, handle: &Playhandle, should_shuffle: bool) -> Result<ControlFlow, Error> {
 		while handle
 			.track_index_check()
 			.is_none()
@@ -160,9 +161,9 @@ impl Playlist {
 		}
 		if self.repeats_can() {
 			self.repeats_update();
-			self.shuffle();
+			if should_shuffle { self.shuffle() }
 			let _ = handle.track_index_try_set(|_| 0); // NOTE(by: @OST-Gh): should not error.
-			return self.play_through(handle)
+			return self.play_through(handle, should_shuffle)
 		}
 		let _ = handle.playlist_index_try_set(|old| old + 1);
 		Ok(().into())
@@ -546,7 +547,7 @@ impl Playhandle {
 				self
 					.playlists
 					.get_unchecked(index)
-					.play_through(self)?
+					.play_through(self, should_shuffle)?
 			} {
 				ControlFlow::Break => return Ok(ControlFlow::Break),
 				ControlFlow::Skip => { }, // NOTE(by: @OST-Gh): assume index math already handled.

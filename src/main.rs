@@ -51,7 +51,7 @@ create_flags!{
 	[[Flags]]
 
 	/// Don't use this option.
-	should_spawn_headless = 'h'
+	should_not_enter_raw = 'r'
 
 	/// If the program should merge all given [`Playlists`] into one.
 	///
@@ -175,10 +175,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 	panic::set_hook(Box::new(new_hook));
 
 	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(arguments)?;
-	if flags.should_repeat_track() {
-		let last = lists
-			.last_mut()
-			.map_or(Err(VectorError::Empty), Ok)?;
+	if let Some(last) = lists.last_mut() {
 		if flags.should_repeat_playlist() { last.time_set(-1) }
 		if flags.should_repeat_track() {
 			for track in last
@@ -186,7 +183,7 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 				.iter_mut()
 			{ track.set_time(-1) }
 		}
-	}
+	} else { Err(VectorError::Empty)? }
 	if flags.should_flatten() { lists = vec![SerDePlaylist::flatten(lists)?]; }
 	let streams = lists
 		.into_iter()
@@ -213,20 +210,18 @@ fn main() -> ExitCode {
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
 	let is_terminal = stdin().is_terminal();
-	if !is_terminal {
-		arguments.reserve(16);
-		arguments.extend(
-			stdin()
-				.lock()
-				.lines()
-				.map_while(|result|
-					result
-						.as_ref()
-						.map_or(false, |line| !line.is_empty())
-						.then(|| result.unwrap())
-				)
-				.map(String::from)
-		)
+	if !is_terminal { // NOTE(by: @OST-Gh): assume stdin is being piped
+		let piped = stdin()
+			.lock()
+			.lines()
+			.map_while(|result|
+				result
+					.as_ref()
+					.map_or(false, |line| !line.is_empty())
+					.then(|| result.unwrap())
+			)
+			.map(String::from);
+		arguments.extend(piped)
 	};
 	let (flags, mut files) = Flags::separate_from(arguments);
 	if files
@@ -239,7 +234,7 @@ fn main() -> ExitCode {
 
 
 	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
-	if !flags.should_spawn_headless() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
+	if !flags.should_not_enter_raw() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
 		let _ = enable_raw_mode();
 		let _ = execute!(stdout(), Hide);
 	}
