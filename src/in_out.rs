@@ -128,7 +128,7 @@ impl IOHandle {
 	#[inline(always)]
 	/// Play a single source.
 	///
-	/// A source is a read-, seekable, syncronous source of bytes, that can be interpreted as a common file encoding.\
+	/// A source is a read-, seek-able, synchronous source of bytes, that can be interpreted as a common file encoding.\
 	/// See [`Decoder`]'s new associated functions.
 	pub fn stream_play(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<(), Error> {
 		let decoder = Decoder::new(source)?;
@@ -229,14 +229,14 @@ impl Controls {
 
 	/// Notify the control thread to exit if it hasn't already.
 	///
-	/// # Basig usage:
+	/// # Basic usage:
 	///
 	/// ```rust
 	/// # use crate::in_out::IOHandle;
 	/// let handle = IOHandle::try_new().unwrap;
 	/// /* do stuff */
 	///
-	/// if let Some(control_reference) = handle.controls_get() { control_refernce.notify_exit() }
+	/// if let Some(control_reference) = handle.controls_get() { control_reference.notify_exit() }
 	/// ```
 	/// Used components: [`IOHandle`]'s [`controls_get`].
 	///

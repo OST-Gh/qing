@@ -2,7 +2,7 @@
 //! Playback essential structures are found here.
 //!
 //! This module's structures should be able to manipulate themselves, even if they are not declared mutable.\
-//! In order to achieve that, the structures encapuslate the mutatable parts in [`Cells`].
+//! In order to achieve that, the structures encapsulate the mutable parts in [`Cells`].
 //!
 //! [`Cells`]: std::cell::Cell
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -74,7 +74,7 @@ pub struct Track {
 /// # Pointers
 ///
 /// This structure holds two pointers that operate similar to coordinates on a grid.\
-/// The first, and more important, pointer is the 'playlist-pointer.' It is responsible for, as the name sais, 
+/// The first, and more important, pointer is the 'playlist-pointer.' It is responsible for, as the name says. 
 pub struct Playhandle {
 	current_track_index: Cell<usize>,
 	current_playlist_index: Cell<usize>,
@@ -92,10 +92,13 @@ pub struct Playhandle {
 
 	io_handle: IOHandle,
 }
+
+// pub struct Player {
+// }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[derive(Default)]
-/// Singals returned by some crucial functions.
+/// Signals returned by some crucial functions.
 ///
 /// These signals are here to indicate exit states.\
 /// # Skip-Levels
@@ -137,7 +140,7 @@ impl Playlist {
 	/// [`Tracks`]: Track
 	pub fn tracks_is_empty(&self) -> bool { self.tracks_count() == 0 }
 
-	// TODO(by: @OST-Gh): maybe incooperate should_shuffle into playhandle...
+	// TODO(by: @OST-Gh): maybe incorporate should_shuffle into playhandle...
 	pub fn play_through(&self, handle: &Playhandle, should_shuffle: bool) -> Result<ControlFlow, Error> {
 		while handle
 			.track_index_check()
@@ -418,7 +421,7 @@ impl Track {
 	}
 
 	#[inline(always)]
-	/// wether or not a [`Track`] can repeat.
+	/// Whether or not a [`Track`] can repeat.
 	pub fn repeats_can(&self) -> bool {
 		self
 			.repeats
@@ -902,7 +905,7 @@ impl TryFrom<Vec<Playlist>> for Playhandle {
 }
 
 impl From<()> for ControlFlow {
-	/// Convinience implementation.
+	/// Convenience implementation.
 	///
 	/// [`Unit`] equates to [`Default`]
 	///

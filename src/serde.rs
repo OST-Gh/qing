@@ -21,7 +21,7 @@ pub struct SerDePlaylist {
 #[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 #[derive(Deserialize)]
 #[derive(Clone)]
-/// A song path with aditional metadata.
+/// A song path with additional metadata.
 pub struct SerDeTrack {
 	pub(crate) file: Box<str>,
 	pub(crate) time: Option<isize>,

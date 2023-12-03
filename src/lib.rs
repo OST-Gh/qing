@@ -23,6 +23,7 @@ use rodio::{
 };
 use toml::de::Error as TOMLError;
 use crossbeam_channel::{
+	RecvError,
 	RecvTimeoutError,
 	TryRecvError,
 };
@@ -39,7 +40,7 @@ pub mod serde;
 pub mod playback;
 
 /// Implementation utilities.
-pub mod utilities;
+mod utilities;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[derive(Error, Debug)]
 /// Errors encountered when
@@ -48,22 +49,22 @@ pub mod utilities;
 #[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 pub enum VectorError {
 	#[error("Index out of bounds")]
-	/// Overflowing an index, because underflowing an [unsigned integer] based index is impossible.
+	/// Overflowing an index, because under-flowing an [unsigned integer] based index is impossible.
 	///
 	/// [unsigned integer]: usize
 	OutOfBounds,
 
 	#[error("Empty vector encountered.")]
-	/// As the name sais.
+	/// As the name says.
 	Empty,
 }
 
 #[derive(Error, Debug)]
 #[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
 pub enum ChannelError {
-	#[error("A Channel-Timeout occured.")]
+	#[error("A Channel-Timeout occurred.")]
 	Timeout,
-	#[error("A CHannel is empty.")]
+	#[error("A Channel is empty.")]
 	Empty,
 	#[error("A Channel disconnected.")]
 	Disconnect,
@@ -104,6 +105,16 @@ impl From<RecvTimeoutError> for ChannelError {
 			RecvTimeoutError::Disconnected => Self::Disconnect,
 		}
 	}
+}
+
+impl From<()> for ChannelError {
+	#[inline(always)]
+	fn from(_: ()) -> Self { Self::Disconnect }
+}
+
+impl From<RecvError> for ChannelError {
+	#[inline(always)]
+	fn from(_: RecvError) -> Self { ().into() }
 }
 
 impl From<TryRecvError> for ChannelError {
