@@ -49,16 +49,14 @@ impl SerDePlaylist {
 		for path in iterator {
 			match read_to_string(fmt_path(&path)?) { // might not always work (might sometimes be mp3 but still contain fully valid utf-8 'till the end)
 				Ok(contents) => rest.push(Self::try_from_contents(contents)?),
-				Err(_) => {
-					outliers
-						.song
-						.push(
-							SerDeTrack {
-								file: path.into_boxed_str(),
-								time: None,
-							}
-						);
-				},
+				Err(_) => outliers
+					.song
+					.push(
+						SerDeTrack {
+							file: path.into_boxed_str(),
+							time: None,
+						}
+					),
 			}
 		}
 		rest.push(outliers);

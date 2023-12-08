@@ -197,11 +197,10 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 		ControlFlow::Default => { },
 	};
 
-	let controls = player
+	player
 		.io_handle_take()
-		.controls_take();
-	controls.exit_notify();
-	controls.clean_up();
+		.controls_take()
+		.cleanly_exit();
 	Ok(())
 }
 

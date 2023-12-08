@@ -19,7 +19,6 @@ use crossterm::event::{
 	KeyModifiers,
 };
 use std::{
-	time::Duration,
 	thread::{ Builder, JoinHandle },
 	io::{ Seek, Read },
 };
@@ -76,19 +75,22 @@ pub struct Controls {
 /// High level control signal representation.
 pub enum Signal {
 	// 1 * 2^2 + 0 * 2^3
-	PlaylistNext	= 0b0101, // 1 * 2^0 + 0 * 2^3
-	PlaylistBack	= 0b0110, // 0 * 2^0 + 1 * 2^3
-	Exit		= 0b0111, // 1 * 2^0 + 1 * 2^3
+	PlaylistNext	= 0b0101, // 1 * 2^0 + 0 * 2^1
+	PlaylistBack	= 0b0110, // 0 * 2^0 + 1 * 2^1
+	Exit		= 0b0111, // 1 * 2^0 + 1 * 2^1
+	PlaylistReset	= 0b0100, // 0 * 2^0 + 0 * 2^1
 
 	// 0 * 2^2 + 1 * 2^3
-	TrackNext	= 0b1001, // 1 * 2^0 + 0 * 2^3
-	TrackBack	= 0b1010, // 0 * 2^0 + 1 * 2^3
-	Play		= 0b1011, // 1 * 2^0 + 1 * 2^3
+	TrackNext	= 0b1001, // 1 * 2^0 + 0 * 2^1
+	TrackBack	= 0b1010, // 0 * 2^0 + 1 * 2^1
+	Play		= 0b1011, // 1 * 2^0 + 1 * 2^1
+	TrackReset	= 0b1000, // 0 * 2^0 + 0 * 2^1
 
 	// 1 * 2^2 + 1 * 2^3
-	VolumeIncrease	= 0b1101, // 1 * 2^0 + 0 * 2^3
-	VolumeDecrease	= 0b1110, // 0 * 2^0 + 1 * 2^3
-	Mute		= 0b1111, // 1 * 2^0 + 1 * 2^3
+	VolumeIncrease	= 0b1101, // 1 * 2^0 + 0 * 2^1
+	VolumeDecrease	= 0b1110, // 0 * 2^0 + 1 * 2^1
+	Mute		= 0b1111, // 1 * 2^0 + 1 * 2^1
+	VolumeReset	= 0b1100, // 0 * 2^0 + 0 * 2^1
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
@@ -144,21 +146,24 @@ impl IOHandle {
 
 		let (signal_sender, signal_receiver) = channel::unbounded();
 		let (exit_notifier, exit_receiver) = channel::unbounded();
-		let key_handler = move ||
-		while let Err(TryRecvError::Empty) = exit_receiver.try_recv() {
-			if !event::poll(Duration::ZERO).unwrap_or_else(|why| panic!("poll an event from the current terminal  {why}")) { continue }
+		let key_handler = move || // NOTE(by: @OST-Gh): Pray to god that the caller actually joins the thread...
+		loop {
+			if !exit_receiver.is_empty() { return }
 			let signal = match event::read().unwrap_or_else(|why| panic!("read an event from the current terminal  {why}")) {
 				Event::Key(KeyEvent { code: KeyCode::Char('l' | 'L'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistNext,
 				Event::Key(KeyEvent { code: KeyCode::Char('j' | 'J'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistBack,
-				Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => return if let Err(why) = signal_sender.send(Signal::Exit) { panic!("sending a signal  {why}") },
+				Event::Key(KeyEvent { code: KeyCode::Char('k' | 'K'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::Exit,
+				Event::Key(KeyEvent { code: KeyCode::Char('h' | 'H'), modifiers, .. }) if modifiers.contains(KeyModifiers::CONTROL) => Signal::PlaylistReset,
 
 				Event::Key(KeyEvent { code: KeyCode::Char('l'), ..}) => Signal::TrackNext,
 				Event::Key(KeyEvent { code: KeyCode::Char('j'), ..}) => Signal::TrackBack,
 				Event::Key(KeyEvent { code: KeyCode::Char('k'), ..}) => Signal::Play,
+				Event::Key(KeyEvent { code: KeyCode::Char('h'), ..}) => Signal::TrackReset,
 
 				Event::Key(KeyEvent { code: KeyCode::Char('L'), .. }) => Signal::VolumeIncrease,
 				Event::Key(KeyEvent { code: KeyCode::Char('J'), .. }) => Signal::VolumeDecrease,
 				Event::Key(KeyEvent { code: KeyCode::Char('K'), .. }) => Signal::Mute,
+				Event::Key(KeyEvent { code: KeyCode::Char('H'), .. }) => Signal::VolumeReset,
 
 				_ => continue,
 			};
@@ -201,6 +206,12 @@ impl Debug for IOHandle {
 }
 
 impl Controls {
+	#[inline(always)]
+	pub fn cleanly_exit(self) {
+		self.exit_notify();
+		self.clean_up()
+	}
+
 	/// Clean up a (hopefully done) control thread.
 	///
 	/// Supposed to be used in conjunction with [`exit_notify`].
@@ -226,7 +237,6 @@ impl Controls {
 			.join();
 	}
 
-
 	/// Notify the control thread to exit if it hasn't already.
 	///
 	/// # Basic usage:
@@ -247,7 +257,12 @@ impl Controls {
 			.send(());
 	}
 
+	#[inline]
 	/// Try to receive a signal, by waiting for it for a set amount of time.
+	///
+	/// This function is an analog to calling [`Receiver.try_recv`].
+	///
+	/// [`Receiver.try_recv`]: Receiver::try_recv
 	pub fn signal_receive(&self) -> Result<Signal, TryRecvError> {
 		self
 			.signal_receiver
@@ -261,23 +276,15 @@ macro_rules! pat {
 	}
 }
 impl Signal {
-	#[inline(always)]
-	pub fn is_track_skip(&self) -> bool { pat!(self => TrackNext | TrackBack) }
+	#[inline(always)] pub fn is_track_skip(&self) -> bool { pat!(self => TrackNext | TrackBack) }
+	#[inline(always)] pub fn is_playlist_skip(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
+	#[inline(always)] pub fn is_next_skip(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
+	#[inline(always)] pub fn is_back_skip(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
+	#[inline(always)] pub fn is_skip(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
+	#[inline(always)] pub fn is_reset(&self) -> bool { pat!(self => PlaylistReset | TrackReset | VolumeReset) }
 
-	#[inline(always)]
-	pub fn is_playlist_skip(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
-
-	#[inline(always)]
-	pub fn is_next_skip(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
-
-	#[inline(always)]
-	pub fn is_back_skip(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
-
-	#[inline(always)]
-	pub fn is_skip(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
-
-
-	#[inline(always)]
-	pub fn is_volume(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute) }
+	#[inline(always)] pub fn is_playlist(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack | PlaylistReset) }
+	#[inline(always)] pub fn is_track(&self) -> bool { pat!(self => TrackNext | TrackBack | TrackReset) }
+	#[inline(always)] pub fn is_volume(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute | VolumeReset) }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

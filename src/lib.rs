@@ -15,7 +15,6 @@ use std::{
 	io::Error as IOError,
 	env::VarError,
 };
-use lofty::LoftyError;
 use rodio::{
 	PlayError,
 	decoder::DecoderError,
@@ -81,9 +80,6 @@ pub enum Error {
 	Play(#[from] PlayError),
 	#[error("Rodio-Stream: {0}")]
 	Stream(#[from] StreamError),
-
-	#[error("Lofty: {0}")]
-	Lofty(#[from] LoftyError),
 
 	#[error("TOML: {0}")]
 	Deserialise(#[from] TOMLError),

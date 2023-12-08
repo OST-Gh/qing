@@ -26,13 +26,18 @@ time = -1 # similar to playlist-level time, but for a single song.
 
 ## Controls:
 ```toml
-' ctrl_l' = "skip one playlist forwards"
-' ctrl_j' = "skip one playlist backwards"
-' ctrl_k' = "exit the program when in active playback"
-'      l' = "skip one track forwards"
-'      j' = "skip one track backwards"
-'      k' = "toggle the playback"
-'shift_l' = "Increase the volume of the currently playing track"
-'shift_j' = "Decrease the volume of the currently playing track"
-'shift_k' = "Toggle the volume of the currently playing track"
+'C-l' = "skip one playlist forwards"
+'C-j' = "skip one playlist backwards"
+'C-k' = "exit the program when in active playback"
+'C-h' = "reset back to the first playlist"
+'  l' = "skip one track forwards"
+'  j' = "skip one track backwards"
+'  k' = "toggle the playback"
+'  h' = "reset back to the first track"
+'S-l' = "increase the volume"
+'S-j' = "decrease the volume"
+'S-k' = "toggle the volume"
+'S-h' = "reset the volume"
 ```
+
+Due to the nature of the updated control code, the program will often need a second input before fully shutting down.
