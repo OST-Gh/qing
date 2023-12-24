@@ -125,6 +125,7 @@ macro_rules! create_flags {
 			$(#[$lone_attribute])* const $lone: [char; count!($($flag),+)] = [$($flag),+];
 			$(#[$shift_attribute])* const $shift: u32 = $by;
 			$(#[$length_attribute])* const $length: u32 = $number;
+
 			$(
 				#[doc = concat!("Specify using '`-", $flag, "`'.")]
 				$(#[$field_attribute])*
@@ -147,7 +148,7 @@ macro_rules! create_flags {
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+#[inline(always)] fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
 
 fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Error> {
 	let new_hook =  |info: &PanicInfo|
@@ -223,6 +224,10 @@ fn main() -> ExitCode {
 		arguments.extend(piped)
 	};
 	let (flags, mut files) = Flags::separate_from(arguments);
+
+	// NOTE(by: @OST-Gh): for convenience.
+	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
+
 	if files
 		.peek()
 		.is_none()
@@ -231,8 +236,6 @@ fn main() -> ExitCode {
 		return 1.into();
 	}
 
-
-	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
 	if !flags.should_not_enter_raw() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
 		let _ = enable_raw_mode();
 		let _ = execute!(stdout(), Hide);
@@ -290,6 +293,7 @@ impl Flags {
 }
 
 impl From<char> for Flags {
+	#[inline]
 	fn from(symbol: char) -> Self {
 		#[cfg(debug_assertions)] if !flag_check(&symbol) { panic!("get a flag  NOT-ALPHA") }
 		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
@@ -299,12 +303,10 @@ impl From<char> for Flags {
 impl Deref for Flags {
 	type Target = u32;
 
-	#[inline(always)]
-	fn deref(&self) -> &u32 { &self.0 }
+	#[inline(always)] fn deref(&self) -> &u32 { &self.0 }
 }
 
 impl DerefMut for Flags {
-	#[inline(always)]
-	fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
+	#[inline(always)] fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
