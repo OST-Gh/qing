@@ -134,13 +134,12 @@ macro_rules! create_flags {
 					#[cfg(debug_assertions)] if !flag_check(&$flag) { panic!("get a flag  NOT-ALPHA") }
 					**self >> Self::from($flag).into_inner() & 1 == 1 // bit hell:)
 					// One copy call needed (**)
-					// 0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
-					//                         z   y   x   w   v   u   t   s   r   q   p   o   n   m   l   k   j   i   h   g   f   e   d   c   b   a
-					//                       122 121 120 119 118 117 116 115 114 113 112 111 110 109 108 107 106 105 104 103 102 101 100 099 098 097
-					//                       025 024 023 022 021 020 019 018 017 016 015 014 013 012 011 010 009 008 007 006 005 004 003 002 001 000
+					//000000 0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+					//______ z	y	x	w	v	u	t	s	r	q	p	o	n	m	l	k	j	i	h	g	f	e	d	c	b	a
+					//______ 122	121	120	119	118	117	116	115	114	113	112	111	110	109	108	107	106	105	104	103	102	101	100	099	098	097
+					//______ 025	024	023	022	021	020	019	018	017	016	015	014	013	012	011	010	009	008	007	006	005	004	003	002	001	000
 				}
 			)+
-
 		}
 
 	};
@@ -297,6 +296,17 @@ impl From<char> for Flags {
 	fn from(symbol: char) -> Self {
 		#[cfg(debug_assertions)] if !flag_check(&symbol) { panic!("get a flag  NOT-ALPHA") }
 		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
+	}
+}
+
+impl From<&str> for Flags {
+	#[inline]
+	fn from(string: &str) -> Self {
+		Self(
+			string
+				.chars()
+				.fold(0, |bits, symbol| Self::from(symbol).into_inner() | bits)
+		)
 	}
 }
 

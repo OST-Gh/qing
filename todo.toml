@@ -1,30 +1,30 @@
 done = []
 
 [[todo]]
-name = "Deccrease memory footprint if even possible"
-group = "global"
+	group = "global"
+	name  = "Deccrease memory footprint if even possible"
 
 [[todo]]
-name = "Search for bugs"
-group = "global"
+	group = "global"
+	name  = "Search for bugs"
 
 [[todo]]
-name = "Merge in_out and songs"
-group = "global"
-purpose = "lessen the file crossing imports"
+	group   = "global"
+	name    = "Merge in_out and songs"
+	purpose = "lessen the file crossing imports"
 
 [[todo]]
-name = "Create a help flag"
-group = "features"
+	group = "features"
+	name  = "Create a help flag"
 
 [[todo]]
-name = "create a token specialiser for Flags (eg: +nightly)"
-group = "features"
+	group = "features"
+	name  = "create a token specialiser for Flags (eg: +nightly)"
 
 [[todo]]
-name = "crate a long name flag part (idk how)"
-group = "features"
+	group = "features"
+	name  = "crate a long name flag part (idk how)"
 
 [[todo]]
-name = "update docs"
-group = "global"
+	group = "global"
+	name  = "update docs"
