@@ -10,22 +10,11 @@
 //! [`Tracks`]: playback::Track
 //! [`Playlist`]: playback::Playlist
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+use crossbeam_channel::{RecvError, RecvTimeoutError, TryRecvError};
+use rodio::{decoder::DecoderError, PlayError, StreamError};
+use std::{env::VarError, io::Error as IOError};
 use thiserror::Error;
-use std::{
-	io::Error as IOError,
-	env::VarError,
-};
-use rodio::{
-	PlayError,
-	decoder::DecoderError,
-	StreamError,
-};
 use toml::de::Error as TOMLError;
-use crossbeam_channel::{
-	RecvError,
-	RecvTimeoutError,
-	TryRecvError,
-};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
 pub mod in_out;
@@ -45,7 +34,11 @@ mod utilities;
 /// Errors encountered when
 #[doc = env!("CARGO_PKG_NAME")]
 /// interacts with [`Vec`]-esque structures.
-#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
+#[cfg_attr(
+	any(debug_assertions, feature = "traits"),
+	derive(PartialEq, Eq, PartialOrd, Ord),
+	derive(Hash)
+)]
 pub enum VectorError {
 	#[error("Index out of bounds")]
 	/// Overflowing an index, because under-flowing an [unsigned integer] based index is impossible.
@@ -59,7 +52,11 @@ pub enum VectorError {
 }
 
 #[derive(Error, Debug)]
-#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
+#[cfg_attr(
+	any(debug_assertions, feature = "traits"),
+	derive(PartialEq, Eq, PartialOrd, Ord),
+	derive(Hash)
+)]
 pub enum ChannelError {
 	#[error("A Channel-Timeout occurred.")]
 	Timeout,
@@ -93,7 +90,7 @@ pub enum Error {
 	#[error("Channel: {0}")]
 	Channel(#[from] ChannelError),
 }
-
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl From<RecvTimeoutError> for ChannelError {
 	fn from(error: RecvTimeoutError) -> Self {
 		match error {
@@ -105,12 +102,16 @@ impl From<RecvTimeoutError> for ChannelError {
 
 impl From<()> for ChannelError {
 	#[inline(always)]
-	fn from(_: ()) -> Self { Self::Disconnect }
+	fn from(_: ()) -> Self {
+		Self::Disconnect
+	}
 }
 
 impl From<RecvError> for ChannelError {
 	#[inline(always)]
-	fn from(_: RecvError) -> Self { ().into() }
+	fn from(_: RecvError) -> Self {
+		().into()
+	}
 }
 
 impl From<TryRecvError> for ChannelError {
@@ -121,4 +122,3 @@ impl From<TryRecvError> for ChannelError {
 		}
 	}
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

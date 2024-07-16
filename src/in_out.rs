@@ -1,37 +1,15 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-use rodio::{
-	OutputStream,
-	OutputStreamHandle,
-	Decoder,
-	Sink,
-};
-use crossbeam_channel::{
-	self as channel,
-	Sender,
-	Receiver,
-	TryRecvError,
-};
-use crossterm::event::{
-	self,
-	Event,
-	KeyEvent,
-	KeyCode,
-	KeyModifiers,
-};
+use crossbeam_channel::{self as channel, Receiver, Sender, TryRecvError};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+#[cfg(debug_assertions)]
+use std::fmt::{self, Debug, Formatter};
 use std::{
-	thread::{ Builder, JoinHandle },
-	io::{ Seek, Read },
-};
-#[cfg(debug_assertions)] use std::fmt::{
-	self,
-	Formatter,
-	Debug,
+	io::{Read, Seek},
+	thread::{Builder, JoinHandle},
 };
 
-use super::{
-	Error,
-	ChannelError,
-};
+use super::{ChannelError, Error};
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
 ///
@@ -70,52 +48,58 @@ pub struct Controls {
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
-#[cfg_attr(any(debug_assertions, feature = "traits"), derive(PartialEq, Eq, PartialOrd, Ord), derive(Hash))]
+#[cfg_attr(
+	any(debug_assertions, feature = "traits"),
+	derive(PartialEq, Eq, PartialOrd, Ord),
+	derive(Hash)
+)]
 #[repr(u8)]
 /// High level control signal representation.
 pub enum Signal {
 	// 1 * 2^2 + 0 * 2^3
-	PlaylistNext	= 0b0101, // 1 * 2^0 + 0 * 2^1
-	PlaylistBack	= 0b0110, // 0 * 2^0 + 1 * 2^1
-	Exit		= 0b0111, // 1 * 2^0 + 1 * 2^1
-	PlaylistReset	= 0b0100, // 0 * 2^0 + 0 * 2^1
+	PlaylistNext = 0b0101,  // 1 * 2^0 + 0 * 2^1
+	PlaylistBack = 0b0110,  // 0 * 2^0 + 1 * 2^1
+	Exit = 0b0111,          // 1 * 2^0 + 1 * 2^1
+	PlaylistReset = 0b0100, // 0 * 2^0 + 0 * 2^1
 
 	// 0 * 2^2 + 1 * 2^3
-	TrackNext	= 0b1001, // 1 * 2^0 + 0 * 2^1
-	TrackBack	= 0b1010, // 0 * 2^0 + 1 * 2^1
-	Play		= 0b1011, // 1 * 2^0 + 1 * 2^1
-	TrackReset	= 0b1000, // 0 * 2^0 + 0 * 2^1
+	TrackNext = 0b1001,  // 1 * 2^0 + 0 * 2^1
+	TrackBack = 0b1010,  // 0 * 2^0 + 1 * 2^1
+	Play = 0b1011,       // 1 * 2^0 + 1 * 2^1
+	TrackReset = 0b1000, // 0 * 2^0 + 0 * 2^1
 
 	// 1 * 2^2 + 1 * 2^3
-	VolumeIncrease	= 0b1101, // 1 * 2^0 + 0 * 2^1
-	VolumeDecrease	= 0b1110, // 0 * 2^0 + 1 * 2^1
-	Mute		= 0b1111, // 1 * 2^0 + 1 * 2^1
-	VolumeReset	= 0b1100, // 0 * 2^0 + 0 * 2^1
+	VolumeIncrease = 0b1101, // 1 * 2^0 + 0 * 2^1
+	VolumeDecrease = 0b1110, // 0 * 2^0 + 1 * 2^1
+	Mute = 0b1111,           // 1 * 2^0 + 1 * 2^1
+	VolumeReset = 0b1100,    // 0 * 2^0 + 0 * 2^1
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
 	#[inline(always)]
 	/// Get a reference to the underlying control structure.
-	pub fn controls_get(&self) -> &Controls { &self.controls }
+	pub fn controls_get(&self) -> &Controls {
+		&self.controls
+	}
 
 	#[inline(always)]
 	/// Take the underlying [`Controls`].
-	pub fn controls_take(self) -> Controls { self.controls }
+	pub fn controls_take(self) -> Controls {
+		self.controls
+	}
 
 	#[inline(always)]
 	/// Get a reference to the [output-stream]
 	///
 	/// [output-stream]: OutputStreamHandle
 	pub fn sound_out_handle_get(&self) -> &OutputStreamHandle {
-		&self
-			.sound_out
+		&self.sound_out
 			.1
 	}
 
 	#[inline(always)]
 	pub fn signal_receive(&self) -> Result<Signal, Error> {
-		self
-			.controls_get()
+		self.controls_get()
 			.signal_receive()
 			.map_err(ChannelError::from)
 			.map_err(Error::Channel)
@@ -125,17 +109,21 @@ impl IOHandle {
 	/// Get a reference to the underlying internal [`Sink`]
 	///
 	/// [`Sink`]: Sink
-	pub fn playback_get(&self) -> &Sink { &self.playback }
+	pub fn playback_get(&self) -> &Sink {
+		&self.playback
+	}
 
 	#[inline(always)]
 	/// Play a single source.
 	///
 	/// A source is a read-, seek-able, synchronous source of bytes, that can be interpreted as a common file encoding.\
 	/// See [`Decoder`]'s new associated functions.
-	pub fn stream_play(&self, source: impl Read + Seek + Send + Sync + 'static) -> Result<(), Error> {
+	pub fn stream_play(
+		&self,
+		source: impl Read + Seek + Send + Sync + 'static,
+	) -> Result<(), Error> {
 		let decoder = Decoder::new(source)?;
-		self
-			.playback
+		self.playback
 			.append(decoder);
 		Ok(())
 	}
@@ -185,13 +173,11 @@ impl IOHandle {
 		let playback = Sink::try_new(&sound_out.1)?;
 		playback.pause();
 
-		Ok(
-			Self {
-				sound_out,
-				controls,
-				playback,
-			}
-		)
+		Ok(Self {
+			sound_out,
+			controls,
+			playback,
+		})
 	}
 }
 
@@ -207,11 +193,16 @@ impl Debug for IOHandle {
 
 impl Controls {
 	#[inline(always)]
+	/// Utility function that calls [`exit_notify`] and [`clean_up`] in succession.
+	///
+	/// [`exit_notify`]: Self.exit_notify
+	/// [`clean_up`]: Self.clean_up
 	pub fn cleanly_exit(self) {
 		self.exit_notify();
 		self.clean_up()
 	}
 
+	#[inline(always)]
 	/// Clean up a (hopefully done) control thread.
 	///
 	/// Supposed to be used in conjunction with [`exit_notify`].
@@ -237,6 +228,7 @@ impl Controls {
 			.join();
 	}
 
+	#[inline(always)]
 	/// Notify the control thread to exit if it hasn't already.
 	///
 	/// # Basic usage:
@@ -264,8 +256,7 @@ impl Controls {
 	///
 	/// [`Receiver.try_recv`]: Receiver::try_recv
 	pub fn signal_receive(&self) -> Result<Signal, TryRecvError> {
-		self
-			.signal_receiver
+		self.signal_receiver
 			.try_recv()
 	}
 }
@@ -276,15 +267,58 @@ macro_rules! pat {
 	}
 }
 impl Signal {
-	#[inline(always)] pub fn is_track_skip(&self) -> bool { pat!(self => TrackNext | TrackBack) }
-	#[inline(always)] pub fn is_playlist_skip(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack) }
-	#[inline(always)] pub fn is_next_skip(&self) -> bool { pat!(self => TrackNext | PlaylistNext) }
-	#[inline(always)] pub fn is_back_skip(&self) -> bool { pat!(self => TrackBack | PlaylistBack) }
-	#[inline(always)] pub fn is_skip(&self) -> bool { pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack) }
-	#[inline(always)] pub fn is_reset(&self) -> bool { pat!(self => PlaylistReset | TrackReset | VolumeReset) }
+	#[inline(always)]
+	/// Mask function that checks wether `self` is [`Next`] or [`Back`].
+	///
+	/// [`Next`]: Self.TrackNext
+	/// [`Back`]: Self.TrackBack
+	pub fn is_track_skip(&self) -> bool {
+		pat!(self => TrackNext | TrackBack)
+	}
+	#[inline(always)]
+	/// Mask function that checks wether `self` is [`Next`] or [`Back`].
+	///
+	/// [`Next`]: Self.PlaylistNext
+	/// [`Back`]: Self.PlaylistBack
+	pub fn is_playlist_skip(&self) -> bool {
+		pat!(self => PlaylistNext | PlaylistBack)
+	}
+	#[inline(always)]
+	/// Mask fucntion that checks if `self` is a [`Playlist`] or [`Track`] level `Next`
+	///
+	/// [`Playlist`]: Self.PlaylistNext
+	/// [`Track`]: Self.TrackNext
+	pub fn is_next_skip(&self) -> bool {
+		pat!(self => TrackNext | PlaylistNext)
+	}
+	#[inline(always)]
+	/// Mask fucntion that checks if `self` is a [`Playlist`] or [`Track`] level `Back`
+	///
+	/// [`Playlist`]: Self.PlaylistBack
+	/// [`Track`]: Self.TrackBack
+	pub fn is_back_skip(&self) -> bool {
+		pat!(self => TrackBack | PlaylistBack)
+	}
+	#[inline(always)]
+	/// Mask function that checks wether `self` is one o
+	pub fn is_skip(&self) -> bool {
+		pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack)
+	}
+	#[inline(always)]
+	pub fn is_reset(&self) -> bool {
+		pat!(self => PlaylistReset | TrackReset | VolumeReset)
+	}
 
-	#[inline(always)] pub fn is_playlist(&self) -> bool { pat!(self => PlaylistNext | PlaylistBack | PlaylistReset) }
-	#[inline(always)] pub fn is_track(&self) -> bool { pat!(self => TrackNext | TrackBack | TrackReset) }
-	#[inline(always)] pub fn is_volume(&self) -> bool { pat!(self => VolumeIncrease | VolumeDecrease | Mute | VolumeReset) }
+	#[inline(always)]
+	pub fn is_playlist(&self) -> bool {
+		pat!(self => PlaylistNext | PlaylistBack | PlaylistReset)
+	}
+	#[inline(always)]
+	pub fn is_track(&self) -> bool {
+		pat!(self => TrackNext | TrackBack | TrackReset)
+	}
+	#[inline(always)]
+	pub fn is_volume(&self) -> bool {
+		pat!(self => VolumeIncrease | VolumeDecrease | Mute | VolumeReset)
+	}
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -1,39 +1,25 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-use std::{
-	panic::{ self, PanicInfo },
-	process::ExitCode,
-	iter::Peekable,
-	env::args,
-	convert::identity,
-	ops::{ Deref, DerefMut },
-	io::{
-		stdin,
-		stdout,
-		BufRead,
-		IsTerminal,
-	},
-};
 use crossterm::{
+	cursor::{Hide, Show},
 	execute,
-	cursor::{ Hide, Show },
-	terminal::{
-		disable_raw_mode,
-		enable_raw_mode,
-		is_raw_mode_enabled,
-	},
+	terminal::{disable_raw_mode, enable_raw_mode, is_raw_mode_enabled},
 };
 use quing::{
-	Error,
-	VectorError,
+	playback::{ControlFlow, Playhandle, Playlist},
 	serde::SerDePlaylist,
-	playback::{
-		Playhandle,
-		Playlist,
-		ControlFlow,
-	},
+	Error, VectorError,
+};
+use std::{
+	convert::identity,
+	env::args,
+	io::{stdin, stdout, BufRead, IsTerminal},
+	iter::Peekable,
+	ops::{Deref, DerefMut},
+	panic::{self, PanicInfo},
+	process::ExitCode,
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-create_flags!{
+create_flags! {
 	#[cfg_attr(debug_assertions, derive(Debug))]
 	/// A flag bundle.
 	///
@@ -145,22 +131,21 @@ macro_rules! create_flags {
 	};
 }
 
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[inline(always)] fn flag_check(symbol: &char) -> bool { symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase() }
+#[inline(always)]
+fn flag_check(symbol: &char) -> bool {
+	symbol.is_ascii_alphabetic() && symbol.is_ascii_lowercase()
+}
 
 fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Error> {
-	let new_hook =  |info: &PanicInfo|
-	unsafe {
+	let new_hook = |info: &PanicInfo| unsafe {
 		let payload = info.payload();
 		let panic = payload
 			.downcast_ref::<&str>()
 			.map(|slice| String::from(*slice))
-			.xor(
-				payload
-					.downcast_ref::<String>()
-					.map(String::from)
-			)
+			.xor(payload
+				.downcast_ref::<String>()
+				.map(String::from))
 			.unwrap();
 		let panic = panic
 			.splitn(2, "  ")
@@ -176,15 +161,23 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 
 	let mut lists: Vec<SerDePlaylist> = SerDePlaylist::try_from_paths(arguments)?;
 	if let Some(last) = lists.last_mut() {
-		if flags.should_repeat_playlist() { last.time_set(-1) }
+		if flags.should_repeat_playlist() {
+			last.time_set(-1)
+		}
 		if flags.should_repeat_track() {
 			for track in last
 				.song_get_mut()
 				.iter_mut()
-			{ track.set_time(-1) }
+			{
+				track.set_time(-1)
+			}
 		}
-	} else { Err(VectorError::Empty)? }
-	if flags.should_flatten() { lists = vec![SerDePlaylist::flatten(lists)?]; }
+	} else {
+		Err(VectorError::Empty)?
+	}
+	if flags.should_flatten() {
+		lists = vec![SerDePlaylist::flatten(lists)?];
+	}
 	let streams = lists
 		.into_iter()
 		.map(Playlist::try_from)
@@ -194,11 +187,10 @@ fn run(arguments: impl Iterator<Item = String>, flags: Flags) -> Result<(), Erro
 	match player.all_playlists_play(!flags.should_not_shuffle())? {
 		ControlFlow::Break => return Ok(()),
 		ControlFlow::Skip | ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): see playback.rs Playhandle::all_streams_play match
-		ControlFlow::Default => { },
+		ControlFlow::Default => {},
 	};
 
-	player
-		.io_handle_take()
+	player.io_handle_take()
 		.controls_take()
 		.cleanly_exit();
 	Ok(())
@@ -209,33 +201,44 @@ fn main() -> ExitCode {
 		.skip(1) // skips the executable path (e.g.: //bin/{bin-name})
 		.collect();
 	let is_terminal = stdin().is_terminal();
-	if !is_terminal { // NOTE(by: @OST-Gh): assume stdin is being piped
+	if !is_terminal {
+		// NOTE(by: @OST-Gh): assume stdin is being piped
 		let piped = stdin()
 			.lock()
 			.lines()
-			.map_while(|result|
-				result
-					.as_ref()
+			.map_while(|result| {
+				result.as_ref()
 					.map_or(false, |line| !line.is_empty())
 					.then(|| result.unwrap())
-			)
+			})
 			.map(String::from);
 		arguments.extend(piped)
 	};
 	let (flags, mut files) = Flags::separate_from(arguments);
 
 	// NOTE(by: @OST-Gh): for convenience.
-	if flags.should_print_version() { print!(concat!('\r', env!("CARGO_PKG_NAME"), " on version ", env!("CARGO_PKG_VERSION"), " by ", env!("CARGO_PKG_AUTHORS"), ".\n\0")) }
+	if flags.should_print_version() {
+		print!(concat!(
+			'\r',
+			env!("CARGO_PKG_NAME"),
+			" on version ",
+			env!("CARGO_PKG_VERSION"),
+			" by ",
+			env!("CARGO_PKG_AUTHORS"),
+			".\n\0"
+		))
+	}
 
-	if files
-		.peek()
+	if files.peek()
 		.is_none()
 	{
 		println!("No input given.");
 		return 1.into();
 	}
 
-	if !flags.should_not_enter_raw() && is_terminal && !is_raw_mode_enabled().is_ok_and(identity) {
+	if !flags.should_not_enter_raw()
+		&& is_terminal && !is_raw_mode_enabled().is_ok_and(identity)
+	{
 		let _ = enable_raw_mode();
 		let _ = execute!(stdout(), Hide);
 	}
@@ -243,50 +246,51 @@ fn main() -> ExitCode {
 	let result = run(files, flags);
 	let _ = execute!(stdout(), Show);
 	let _ = disable_raw_mode();
-	if let Err(error) = result { println!("{error}") }
+	if let Err(error) = result {
+		println!("{error}")
+	}
 	0.into()
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Flags {
 	#[inline(always)]
 	/// Get the underlying unsigned integer.
-	pub(crate) fn into_inner(self) -> u32 { self.0 }
+	pub(crate) fn into_inner(self) -> u32 {
+		self.0
+	}
 
 	/// Split the program arguments into files and flags.
 	///
 	/// # Panics:
 	///
 	/// - Arguments are empty.
-	pub(crate) fn separate_from(iterator: Vec<String>) -> (Self, Peekable<impl Iterator<Item = String>>) {
+	pub(crate) fn separate_from(
+		iterator: Vec<String>,
+	) -> (Self, Peekable<impl Iterator<Item = String>>) {
 		let mut flag_count = 0;
 		let bits = iterator
 			.iter()
-			.map_while(|argument|
+			.map_while(|argument| {
+				let raw = argument
+					.strip_prefix('-')?
+					.replace(|symbol| !flag_check(&symbol), "");
+				flag_count += 1;
+				Some(raw)
+			})
+			.fold(Self(0), |mut bits, raw| {
+				for symbol in raw
+					.chars()
+					.filter(|symbol| Self::INUSE_IDENTIFIERS.contains(symbol))
 				{
-					let raw = argument
-						.strip_prefix('-')?
-						.replace(|symbol| !flag_check(&symbol), "");
-					flag_count += 1;
-					Some(raw)
+					*bits |= 1 << Self::from(symbol).into_inner()
 				}
-			)
-			.fold(
-				Self(0),
-				|mut bits, raw|
-				{
-					for symbol in raw
-						.chars()
-						.filter(|symbol| Self::INUSE_IDENTIFIERS.contains(symbol))
-					{ *bits |= 1 << Self::from(symbol).into_inner() }
-					bits
-				}
-			);
+				bits
+			});
 		(
 			bits,
-			iterator
-				.into_iter()
+			iterator.into_iter()
 				.skip(flag_count)
-				.peekable()
+				.peekable(),
 		)
 	}
 }
@@ -294,7 +298,10 @@ impl Flags {
 impl From<char> for Flags {
 	#[inline]
 	fn from(symbol: char) -> Self {
-		#[cfg(debug_assertions)] if !flag_check(&symbol) { panic!("get a flag  NOT-ALPHA") }
+		#[cfg(debug_assertions)]
+		if !flag_check(&symbol) {
+			panic!("get a flag  NOT-ALPHA")
+		}
 		Self((symbol as u32 - Self::SHIFT) % Self::LENGTH)
 	}
 }
@@ -302,21 +309,24 @@ impl From<char> for Flags {
 impl From<&str> for Flags {
 	#[inline]
 	fn from(string: &str) -> Self {
-		Self(
-			string
-				.chars()
-				.fold(0, |bits, symbol| Self::from(symbol).into_inner() | bits)
-		)
+		Self(string
+			.chars()
+			.fold(0, |bits, symbol| Self::from(symbol).into_inner() | bits))
 	}
 }
 
 impl Deref for Flags {
 	type Target = u32;
 
-	#[inline(always)] fn deref(&self) -> &u32 { &self.0 }
+	#[inline(always)]
+	fn deref(&self) -> &u32 {
+		&self.0
+	}
 }
 
 impl DerefMut for Flags {
-	#[inline(always)] fn deref_mut(&mut self) -> &mut u32 { &mut self.0 }
+	#[inline(always)]
+	fn deref_mut(&mut self) -> &mut u32 {
+		&mut self.0
+	}
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
