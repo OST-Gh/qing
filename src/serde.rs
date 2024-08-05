@@ -59,6 +59,18 @@ impl SerDePlaylist {
 		self.time_set(0)
 	}
 
+	#[inline(always)]
+	/// Primitive for setting shuffling equal to some state.
+	pub fn vary_set(&mut self, state: bool) {
+		self.vary = state.then_some(true);
+	}
+
+	#[inline(always)]
+	/// Primitive for setting shuffling equal to null.
+	pub fn vary_unset(&mut self) {
+		self.vary_set(false)
+	}
+
 	#[inline]
 	/// Filter out [`SerDePlaylist`] [`files`] from audio [`files`].
 	///

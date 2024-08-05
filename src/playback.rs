@@ -319,7 +319,7 @@ impl TryFrom<SerDePlaylist> for Playlist {
 				Err(VectorError::Empty)?
 			}
 			Ok(Self {
-				shuffle: vary.unwrap_or_default(),
+				shuffle: vary.unwrap_or(true),
 				track_map: Cell::new(track_map),
 				length: tracks.len(),
 				tracks,

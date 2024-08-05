@@ -9,7 +9,7 @@
 	name         = 'quing'
 	readme       = 'README.md'
 	repository   = 'https://github.com/OST-Gh/quing.git'
-	version      = '2.2.0'
+	version      = '2.2.1'
 ###############################################################################################################################
 [[bin]]
 	name = 'quing'
