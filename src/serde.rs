@@ -1,9 +1,9 @@
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use super::{utilities::fmt_path, Error, VectorError};
 use serde::Deserialize;
-use std::fs::read_to_string;
+use std::{fs::read_to_string, num::NonZero};
 use toml::from_str;
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[cfg_attr(
 	any(debug_assertions, feature = "traits"),
@@ -15,6 +15,7 @@ use toml::from_str;
 pub struct SerDePlaylist {
 	pub(crate) song: Vec<SerDeTrack>,
 	pub(crate) time: Option<isize>,
+	pub(crate) vary: Option<bool>,
 }
 
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
@@ -30,29 +31,35 @@ pub struct SerDeTrack {
 	pub(crate) file: Box<str>,
 	pub(crate) time: Option<isize>,
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl SerDePlaylist {
 	#[inline(always)]
+	/// Destructure `self` and get a reference to the contained tracks.
 	pub fn song_get(&self) -> &Vec<SerDeTrack> {
 		&self.song
 	}
 	#[inline(always)]
+	/// Destructure `self` and get the mutable reference to the contained tracks.
 	pub fn song_get_mut(&mut self) -> &mut Vec<SerDeTrack> {
 		&mut self.song
 	}
 	#[inline(always)]
+	/// Destructure `self` and take the contained tracks.
 	pub fn song_take(self) -> Vec<SerDeTrack> {
 		self.song
 	}
 	#[inline(always)]
+	/// Primitive for setting repeats equal to some non-zero value.
 	pub fn time_set(&mut self, value: isize) {
-		self.time = Some(value)
+		self.time = NonZero::<isize>::new(value).map(NonZero::get)
 	}
 	#[inline(always)]
+	/// Primitive for setting repeats equal to null.
 	pub fn time_unset(&mut self) {
-		self.time = None
+		self.time_set(0)
 	}
 
+	#[inline]
 	/// Filter out [`SerDePlaylist`] [`files`] from audio [`files`].
 	///
 	/// This function returns a [`Vec`] that contains all successfully parsed playlists.\
@@ -66,6 +73,7 @@ impl SerDePlaylist {
 		let mut outliers = SerDePlaylist {
 			song: Vec::with_capacity(8),
 			time: None,
+			vary: None,
 		};
 		for path in iterator {
 			match read_to_string(fmt_path(&path)?) {
@@ -85,6 +93,7 @@ impl SerDePlaylist {
 			.collect())
 	}
 
+	#[inline]
 	/// Merge a list of [`SerDePlaylists`] into a single [`SerDePlaylist`].
 	///
 	/// [`SerDePlaylists`]: SerDePlaylist
@@ -95,11 +104,19 @@ impl SerDePlaylist {
 			.ok_or(VectorError::Empty)?
 			.time
 			.unwrap_or_default();
+		let shuffle = lists
+			.iter()
+			.find_map(|Self { vary, .. }| match vary {
+				Some(false) | None => Some(false),
+				Some(true) => None,
+			})
+			.ok_or(VectorError::Empty)?;
 		let tracks: Vec<SerDeTrack> = lists
 			.into_iter()
 			.flat_map(|list| list.song)
 			.collect();
 		Ok(Self {
+			vary: Some(shuffle),
 			song: tracks,
 			time: Some(repeats),
 		})

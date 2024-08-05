@@ -1,61 +1,61 @@
-###############################################################################################################################################################################################################################################################
+###############################################################################################################################
 [package]
-	authors      = ["OST-Gh"]
-	categories   = ["command-line-utilities", "multimedia::audio"]
-	description  = "A (hopefully) minimalist toml based song shuffler"
-	edition      = "2021"
-	keywords     = ["audio", "playback", "toml", "minimal"]
-	license-file = "LICENSE"
-	name         = "quing"
-	readme       = "README.md"
-	repository   = "https://github.com/OST-Gh/quing.git"
-	version      = "2.1.0"
-###############################################################################################################################################################################################################################################################
+	authors      = ['OST-Gh']
+	categories   = ['command-line-utilities', 'multimedia::audio']
+	description  = 'A (hopefully) minimalist toml based song shuffler'
+	edition      = '2021'
+	keywords     = ['audio', 'playback', 'toml', 'minimal']
+	license-file = 'LICENSE'
+	name         = 'quing'
+	readme       = 'README.md'
+	repository   = 'https://github.com/OST-Gh/quing.git'
+	version      = '2.2.0'
+###############################################################################################################################
 [[bin]]
-	name = "quing"
-	path = "src/main.rs"
-###############################################################################################################################################################################################################################################################
+	name = 'quing'
+	path = 'src/main.rs'
+###############################################################################################################################
 [dependencies]
-	crossbeam-channel = "0"
-	fastrand          = "2"
-	rodio             = "0"
-	thiserror         = "1"
+	crossbeam-channel = '0'
+	fastrand          = '2'
+	rodio             = '0'
+	thiserror         = '1'
 
 	[dependencies.crossterm]
 		default-features = false
-		features         = ["events"]
-		version          = "0"
+		features         = ['events']
+		version          = '0'
 	[dependencies.serde]
 		default-features = false
-		features         = ["derive"]
-		version          = "1"
+		features         = ['derive']
+		version          = '1'
 	[dependencies.toml]
 		default-features = false
-		features         = ["parse"]
-		version          = "0"
-###############################################################################################################################################################################################################################################################
+		features         = ['parse']
+		version          = '0'
+###############################################################################################################################
 [features]
 	debug  = []
-	traits = ["debug"]
-###############################################################################################################################################################################################################################################################
+	traits = ['debug']
+###############################################################################################################################
 [profile.release]
 	codegen-units    = 1
 	debug            = false
 	debug-assertions = false
 	incremental      = false
 	lto              = true
-	opt-level        = "z"
+	opt-level        = 'z'
 	overflow-checks  = false
-	panic            = "unwind"
-	split-debuginfo  = "unpacked"
+	panic            = 'unwind'
+	split-debuginfo  = 'unpacked'
 	strip            = true
 
-	[profile.release.package."*"]
+	[profile.release.package.'*']
 		codegen-units    = 1
 		debug            = false
 		debug-assertions = false
 		incremental      = false
-		opt-level        = "z"
+		opt-level        = 'z'
 		overflow-checks  = false
-		split-debuginfo  = "unpacked"
+		split-debuginfo  = 'unpacked'
 		strip            = true

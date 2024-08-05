@@ -3,6 +3,7 @@
 ## Usage: quing [-flags...] [playlist.toml...]
 ```toml
 time = -1 # an optional setting for repeating a playlist n times. if the number is below zero, it'll repeat infinitely
+vary = false # set that a playlist cannot be shuffled
 
 [[song]]
 file = "" # file path pointing towards a file, which contains audio data.

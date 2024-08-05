@@ -1,11 +1,11 @@
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //! Playback essential structures are found here.
 //!
 //! This module's structures should be able to manipulate themselves, even if they are not declared mutable.\
 //! In order to achieve that, the structures encapsulate the mutable parts in [`Cells`].
 //!
 //! [`Cells`]: std::cell::Cell
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use super::{
 	in_out::{IOHandle, Signal},
 	serde::{SerDePlaylist, SerDeTrack},
@@ -14,7 +14,6 @@ use super::{
 };
 use crossbeam_channel::TryRecvError;
 use fastrand::Rng;
-use serde::Deserialize;
 use std::{
 	cell::Cell,
 	fs::File,
@@ -22,10 +21,9 @@ use std::{
 	path::PathBuf,
 	time::{Duration, Instant},
 };
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const STEP: f32 = 0.025;
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(Deserialize)]
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A collection of [`Tracks`].
 ///
 /// This structure maintains two [`Vecs`]:
@@ -34,31 +32,26 @@ const STEP: f32 = 0.025;
 /// [`Tracks`]: Track
 /// [`Vecs`]: Vec
 pub struct Playlist {
-	#[serde(skip_deserializing)]
 	/// Map of indexes that map directly to the vector of [`streams`]
 	///
 	/// [`streams`]: Self#field.streams
 	track_map: Cell<Vec<usize>>,
+
+	shuffle: bool,
 
 	/// Maximum pointer offset.
 	///
 	/// Equates to [`len`].
 	///
 	/// [`len`]: Vec::len
-	#[serde(skip_deserializing)]
 	length: usize,
-	#[serde(alias = "song")]
 	tracks: Vec<Track>,
-	#[serde(alias = "time")]
 	repeats: Cell<isize>,
 }
 
-#[derive(Deserialize)]
 /// A byte stream.
 pub struct Track {
-	#[serde(alias = "path")]
 	file_path: PathBuf,
-	#[serde(alias = "time")]
 	repeats: Cell<isize>,
 }
 
@@ -89,7 +82,7 @@ pub struct Playhandle {
 
 // pub struct Player {
 // }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[derive(Default)]
 /// Signals returned by some crucial functions.
@@ -114,7 +107,7 @@ pub enum ControlFlow {
 	#[default]
 	Default,
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl Playlist {
 	#[inline(always)]
 	/// Get the amount of held [`Tracks`].
@@ -136,7 +129,15 @@ impl Playlist {
 		self.tracks_count() == 0
 	}
 
-	// TODO(by: @OST-Gh): maybe incorporate should_shuffle into playhandle...
+	#[inline(always)]
+	/// Check if it's allowed to shuffle.
+	pub fn shuffle_can(&self) -> bool {
+		self.shuffle
+	}
+
+	/// Play the entire playlist `n` times through a [`Playhandle`].
+	///
+	/// Where `n` is the repeats value.
 	pub fn play_through(
 		&self,
 		handle: &Playhandle,
@@ -309,7 +310,7 @@ impl Playlist {
 impl TryFrom<SerDePlaylist> for Playlist {
 	type Error = Error;
 
-	fn try_from(SerDePlaylist { song, time }: SerDePlaylist) -> Result<Self, Error> {
+	fn try_from(SerDePlaylist { song, time, vary }: SerDePlaylist) -> Result<Self, Error> {
 		let f = |tuple: Vec<(usize, Track)>| {
 			let (track_map, tracks): (Vec<usize>, Vec<Track>) = tuple
 				.into_iter()
@@ -318,6 +319,7 @@ impl TryFrom<SerDePlaylist> for Playlist {
 				Err(VectorError::Empty)?
 			}
 			Ok(Self {
+				shuffle: vary.unwrap_or_default(),
 				track_map: Cell::new(track_map),
 				length: tracks.len(),
 				tracks,
@@ -542,18 +544,15 @@ impl Playhandle {
 			.is_none()
 		{
 			let index = unsafe { self.playlist_index_get_unchecked() };
-			if should_shuffle {
-				unsafe {
-					self.playlists
-						.get_unchecked_mut(index)
-						.shuffle()
-				}
-			}
-			match unsafe {
+			let playlist = unsafe {
 				self.playlists
 					.get_unchecked(index)
-					.play_through(self, should_shuffle)?
-			} {
+			};
+			let shufflable = should_shuffle && playlist.shuffle_can();
+			if shufflable {
+				playlist.shuffle()
+			}
+			match playlist.play_through(self, shufflable)? {
 				ControlFlow::Break => return Ok(ControlFlow::Break),
 				ControlFlow::Skip => {}, // NOTE(by: @OST-Gh): assume index math already handled.
 				ControlFlow::SkipSkip => unimplemented!(), // NOTE(by: @OST-Gh): cannot return level-2 skip at playlist level.
@@ -744,10 +743,12 @@ impl Playhandle {
 	}
 
 	#[inline(always)]
+	/// Get a reference to the underlying [`IOHandle`].
 	pub fn io_handle_get(&self) -> &IOHandle {
 		&self.io_handle
 	}
 	#[inline(always)]
+	/// Take the underlying [`IOHandle`].
 	pub fn io_handle_take(self) -> IOHandle {
 		self.io_handle
 	}
@@ -762,6 +763,9 @@ impl Playhandle {
 	}
 
 	#[inline]
+	/// Get an un-clamped version of [`volume`]
+	///
+	/// [`volume`]: self.volume
 	pub fn volume_get_raw(&self) -> f32 {
 		self.volume
 			.get()
@@ -777,6 +781,7 @@ impl Playhandle {
 	}
 
 	#[inline(always)]
+	/// Set the volume back to the default (1.0).
 	pub fn volume_reset(&self) {
 		self.volume_set_raw(|_| 1.0)
 	}
@@ -929,6 +934,7 @@ impl Playhandle {
 		}
 	}
 
+	/// Swap the internal playlist with a new one.
 	pub fn playlists_swap(&mut self, new: Vec<Playlist>) {
 		self.playback_clear();
 		self.playlists = new;

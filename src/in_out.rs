@@ -1,4 +1,4 @@
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use crossbeam_channel::{self as channel, Receiver, Sender, TryRecvError};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
@@ -10,13 +10,13 @@ use std::{
 };
 
 use super::{ChannelError, Error};
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// This is a default message that is used when a [`Sender`] or [`Receiver`] has hung up the connection.
 ///
 /// [`Sender`]: crossbeam_channel::Sender
 /// [`Receiver`]: crossbeam_channel::Receiver
 const DISCONNECTED: &str = "DISCONNECTED CHANNEL";
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// Singleton bundled In- and Output constructs.
 ///
 /// # Basic usage
@@ -46,7 +46,7 @@ pub struct Controls {
 	exit_notifier: Sender<()>,
 	signal_receiver: Receiver<Signal>,
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[cfg_attr(
 	any(debug_assertions, feature = "traits"),
@@ -74,7 +74,7 @@ pub enum Signal {
 	Mute = 0b1111,           // 1 * 2^0 + 1 * 2^1
 	VolumeReset = 0b1100,    // 0 * 2^0 + 0 * 2^1
 }
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl IOHandle {
 	#[inline(always)]
 	/// Get a reference to the underlying control structure.
@@ -268,21 +268,23 @@ macro_rules! pat {
 }
 impl Signal {
 	#[inline(always)]
-	/// Mask function that checks wether `self` is [`Next`] or [`Back`].
+	/// Mask function that checks whether `self` is [`Next`] or [`Back`].
 	///
 	/// [`Next`]: Self.TrackNext
 	/// [`Back`]: Self.TrackBack
 	pub fn is_track_skip(&self) -> bool {
 		pat!(self => TrackNext | TrackBack)
 	}
+
 	#[inline(always)]
-	/// Mask function that checks wether `self` is [`Next`] or [`Back`].
+	/// Mask function that checks whether `self` is [`Next`] or [`Back`].
 	///
 	/// [`Next`]: Self.PlaylistNext
 	/// [`Back`]: Self.PlaylistBack
 	pub fn is_playlist_skip(&self) -> bool {
 		pat!(self => PlaylistNext | PlaylistBack)
 	}
+
 	#[inline(always)]
 	/// Mask fucntion that checks if `self` is a [`Playlist`] or [`Track`] level `Next`
 	///
@@ -291,6 +293,7 @@ impl Signal {
 	pub fn is_next_skip(&self) -> bool {
 		pat!(self => TrackNext | PlaylistNext)
 	}
+
 	#[inline(always)]
 	/// Mask fucntion that checks if `self` is a [`Playlist`] or [`Track`] level `Back`
 	///
@@ -299,25 +302,33 @@ impl Signal {
 	pub fn is_back_skip(&self) -> bool {
 		pat!(self => TrackBack | PlaylistBack)
 	}
+
 	#[inline(always)]
-	/// Mask function that checks wether `self` is one o
+	/// Mask function that checks whether `self` is a skip instruction.
 	pub fn is_skip(&self) -> bool {
 		pat!(self => TrackNext | TrackBack | PlaylistNext | PlaylistBack)
 	}
+
 	#[inline(always)]
+	/// Mask function that checks whether `self` is a reset instruction.
 	pub fn is_reset(&self) -> bool {
 		pat!(self => PlaylistReset | TrackReset | VolumeReset)
 	}
 
 	#[inline(always)]
+	/// Mask function that checks whether `self` is on the playlist layer.
 	pub fn is_playlist(&self) -> bool {
 		pat!(self => PlaylistNext | PlaylistBack | PlaylistReset)
 	}
+
 	#[inline(always)]
+	/// Mask function that checks whether `self` is on the track layer.
 	pub fn is_track(&self) -> bool {
 		pat!(self => TrackNext | TrackBack | TrackReset)
 	}
+
 	#[inline(always)]
+	/// Mask function that checks whether `self` is on the volume layer.
 	pub fn is_volume(&self) -> bool {
 		pat!(self => VolumeIncrease | VolumeDecrease | Mute | VolumeReset)
 	}
