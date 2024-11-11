@@ -13,7 +13,6 @@
 use crossbeam_channel::{RecvError, RecvTimeoutError, TryRecvError};
 use rodio::{decoder::DecoderError, PlayError, StreamError};
 use std::{env::VarError, io::Error as IOError};
-use thiserror::Error;
 use toml::de::Error as TOMLError;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// A module for handling and interacting with external devices.
@@ -30,7 +29,7 @@ pub mod playback;
 /// Implementation utilities.
 mod utilities;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#[derive(Error, Debug)]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 /// Errors encountered when
 #[doc = env!("CARGO_PKG_NAME")]
 /// interacts with [`Vec`]-esque structures.
@@ -40,18 +39,16 @@ mod utilities;
 	derive(Hash)
 )]
 pub enum VectorError {
-	#[error("Index out of bounds")]
 	/// Overflowing an index, because under-flowing an [unsigned integer] based index is impossible.
 	///
 	/// [unsigned integer]: usize
 	OutOfBounds,
 
-	#[error("Empty vector encountered.")]
 	/// As the name says.
 	Empty,
 }
 
-#[derive(Error, Debug)]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 #[cfg_attr(
 	any(debug_assertions, feature = "traits"),
 	derive(PartialEq, Eq, PartialOrd, Ord),
@@ -59,38 +56,22 @@ pub enum VectorError {
 )]
 #[derive(Default)]
 pub enum ChannelError {
-	#[error("A Channel-Timeout occurred.")]
 	Timeout,
-	#[error("A Channel is empty.")]
 	Empty,
-	#[error("A Channel disconnected.")]
 	#[default]
 	Disconnect,
 }
 
-#[derive(Error, Debug)]
+#[cfg_attr(any(debug_assertions, feature = "debug"), derive(Debug))]
 pub enum Error {
-	#[error("IO: {0}")]
-	Io(#[from] IOError),
-
-	#[error("Rodio-Decode: {0}")]
-	Decode(#[from] DecoderError),
-	#[error("Rodio-Play: {0}")]
-	Play(#[from] PlayError),
-	#[error("Rodio-Stream: {0}")]
-	Stream(#[from] StreamError),
-
-	#[error("TOML: {0}")]
-	Deserialise(#[from] TOMLError),
-
-	#[error("Variable: {0}")]
-	Variable(#[from] VarError),
-
-	#[error("Vector: {0}")]
-	Vector(#[from] VectorError),
-
-	#[error("Channel: {0}")]
-	Channel(#[from] ChannelError),
+	Io(IOError),
+	Decode(DecoderError),
+	Play(PlayError),
+	Stream(StreamError),
+	Deserialise(TOMLError),
+	Variable(VarError),
+	Vector(VectorError),
+	Channel(ChannelError),
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 impl From<RecvTimeoutError> for ChannelError {
@@ -136,5 +117,54 @@ impl From<TryRecvError> for ChannelError {
 			TryRecvError::Empty => Self::Empty,
 			TryRecvError::Disconnected => Self::Disconnect,
 		}
+	}
+}
+
+impl From<IOError> for Error {
+	#[inline(always)]
+	fn from(inner: IOError) -> Self {
+		Self::Io(inner)
+	}
+}
+impl From<DecoderError> for Error {
+	#[inline(always)]
+	fn from(inner: DecoderError) -> Self {
+		Self::Decode(inner)
+	}
+}
+impl From<PlayError> for Error {
+	#[inline(always)]
+	fn from(inner: PlayError) -> Self {
+		Self::Play(inner)
+	}
+}
+impl From<StreamError> for Error {
+	#[inline(always)]
+	fn from(inner: StreamError) -> Self {
+		Self::Stream(inner)
+	}
+}
+impl From<TOMLError> for Error {
+	#[inline(always)]
+	fn from(inner: TOMLError) -> Self {
+		Self::Deserialise(inner)
+	}
+}
+impl From<VarError> for Error {
+	#[inline(always)]
+	fn from(inner: VarError) -> Self {
+		Self::Variable(inner)
+	}
+}
+impl From<VectorError> for Error {
+	#[inline(always)]
+	fn from(inner: VectorError) -> Self {
+		Self::Vector(inner)
+	}
+}
+impl From<ChannelError> for Error {
+	#[inline(always)]
+	fn from(inner: ChannelError) -> Self {
+		Self::Channel(inner)
 	}
 }

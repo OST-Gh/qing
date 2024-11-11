@@ -17,7 +17,7 @@ use fastrand::Rng;
 use std::{
 	cell::Cell,
 	fs::File,
-	io::{Cursor, Read, Seek},
+	io::{Read, Seek},
 	path::PathBuf,
 	time::{Duration, Instant},
 };
@@ -342,9 +342,7 @@ impl TryFrom<SerDePlaylist> for Playlist {
 impl Track {
 	/// Load the file, and play it back.
 	pub fn play_through(&self, data: &Playhandle) -> Result<ControlFlow, Error> {
-		let mut stream = Vec::with_capacity(127);
-		File::open(&self.file_path)?.read_to_end(&mut stream)?;
-		data.stream_play(Cursor::new(unsafe { &*(stream.as_slice() as *const [u8]) }))?; // NOTE(by: @OST-Gh): yep, a fucking lifetime hoist via raw pointers.
+		data.stream_play(File::open(&self.file_path)?)?;
 
 		let controls = data
 			.io_handle_get()

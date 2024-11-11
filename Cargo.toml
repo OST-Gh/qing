@@ -2,7 +2,7 @@
 [package]
 	authors      = ['OST-Gh']
 	categories   = ['command-line-utilities', 'multimedia::audio']
-	description  = 'A (hopefully) minimalist toml based song shuffler'
+	description  = 'A (hopefully) minimalist toml based audio-file player'
 	edition      = '2021'
 	keywords     = ['audio', 'playback', 'toml', 'minimal']
 	license-file = 'LICENSE'
@@ -18,8 +18,10 @@
 [dependencies]
 	crossbeam-channel = '0'
 	fastrand          = '2'
-	rodio             = '0'
-	thiserror         = '1'
+	# [202408052348+0200] NOTE(by: @OST-Gh): add if i make it a tui
+	# lofty             = '0'
+	# ratatui           = '0'
+	rodio = '0'
 
 	[dependencies.crossterm]
 		default-features = false
